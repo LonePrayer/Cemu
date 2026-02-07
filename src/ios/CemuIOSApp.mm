@@ -1,5 +1,6 @@
 #import <UIKit/UIKit.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
+#import <objc/runtime.h>
 
 #include <cerrno>
 #include <cstdio>
@@ -95,6 +96,44 @@ UIViewController* g_rootController = nil;
 UIView* g_renderView = nil;
 UIView* g_padView = nil;
 bool g_cemu_initialized = false;
+
+// --- Security-scoped bookmark helpers for MLC Path ---
+static NSString* const kMLCPathBookmarkKey = @"mlcPathBookmark";
+
+static NSData* LoadMLCPathBookmark()
+{
+	return [[NSUserDefaults standardUserDefaults] dataForKey:kMLCPathBookmarkKey];
+}
+
+static void SaveMLCPathBookmark(NSData* bookmark)
+{
+	if (bookmark)
+		[[NSUserDefaults standardUserDefaults] setObject:bookmark forKey:kMLCPathBookmarkKey];
+	else
+		[[NSUserDefaults standardUserDefaults] removeObjectForKey:kMLCPathBookmarkKey];
+}
+
+static NSURL* ResolveAndActivateMLCPathBookmark()
+{
+	NSData* data = LoadMLCPathBookmark();
+	if (!data) return nil;
+	BOOL stale = NO;
+	NSError* err = nil;
+	NSURL* url = [NSURL URLByResolvingBookmarkData:data options:0 relativeToURL:nil bookmarkDataIsStale:&stale error:&err];
+	if (url && !err)
+	{
+		[url startAccessingSecurityScopedResource];
+		GetConfig().SetMLCPath(fs::path(url.fileSystemRepresentation));
+		cemuLog_log(LogType::Force, "MLC path bookmark resolved: {}", url.fileSystemRepresentation);
+		return url;
+	}
+	else
+	{
+		cemuLog_log(LogType::Force, "MLC path bookmark invalid, clearing");
+		SaveMLCPathBookmark(nil);
+	}
+	return nil;
+}
 
 // --- Security-scoped bookmark helpers for Game Paths ---
 static NSString* const kGamePathBookmarksKey = @"gamePathBookmarks";
@@ -816,6 +855,9 @@ void InitializeCemuCore()
 	if (isFirstStart)
 		GetConfigHandle().Save();
 
+	IOSLOG("InitializeCemuCore: Resolve MLC path bookmark");
+	ResolveAndActivateMLCPathBookmark();
+
 	IOSLOG("InitializeCemuCore: InitializeMLCOrFail");
 	InitializeMLCOrFail();
 	IOSLOG("InitializeCemuCore: ActiveSettings::Init");
@@ -968,13 +1010,14 @@ extern "C" void CemuIOS_ShowErrorDialog(const char* message, const char* title)
 	[self dismissViewControllerAnimated:YES completion:nil];
 }
 
-- (NSInteger)numberOfSectionsInTableView:(UITableView*)tableView { return 3; }
+- (NSInteger)numberOfSectionsInTableView:(UITableView*)tableView { return 4; }
 
 - (NSString*)tableView:(UITableView*)tableView titleForHeaderInSection:(NSInteger)section
 {
 	if (section == 0) return @"Display";
 	if (section == 1) return @"Graphic Packs";
-	if (section == 2) return @"Game Paths";
+	if (section == 2) return @"MLC Path";
+	if (section == 3) return @"Game Paths";
 	return nil;
 }
 
@@ -989,7 +1032,8 @@ extern "C" void CemuIOS_ShowErrorDialog(const char* message, const char* title)
 			return [NSString stringWithFormat:@"Installed: %s", ver.c_str()];
 		return @"Not installed. Tap to download from GitHub.";
 	}
-	if (section == 2) return @"Add folders containing game updates or DLC.";
+	if (section == 2) return @"Save data and updates are stored here. Set an external folder so uninstalling doesn't delete saves.";
+	if (section == 3) return @"Add folders containing game updates or DLC.";
 	return nil;
 }
 
@@ -997,7 +1041,8 @@ extern "C" void CemuIOS_ShowErrorDialog(const char* message, const char* title)
 {
 	if (section == 0) return 1;
 	if (section == 1) return 1;
-	if (section == 2) return (NSInteger)self.gamePaths.count + 1;
+	if (section == 2) return 1; // MLC path (single row: shows current or "Set MLC Path…")
+	if (section == 3) return (NSInteger)self.gamePaths.count + 1;
 	return 0;
 }
 
@@ -1022,7 +1067,28 @@ extern "C" void CemuIOS_ShowErrorDialog(const char* message, const char* title)
 		cell.textLabel.textColor = self.view.tintColor;
 		return cell;
 	}
-	if (indexPath.section == 2)
+	if (indexPath.section == 2 && indexPath.row == 0)
+	{
+		UITableViewCell* cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];
+		auto mlcVal = GetConfig().mlc_path.GetValue();
+		if (!mlcVal.empty())
+		{
+			NSString* path = [NSString stringWithUTF8String:mlcVal.c_str()];
+			cell.textLabel.text = path.lastPathComponent;
+			cell.detailTextLabel.text = path;
+			cell.detailTextLabel.numberOfLines = 2;
+			cell.detailTextLabel.textColor = [UIColor secondaryLabelColor];
+			cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+		}
+		else
+		{
+			cell.textLabel.text = @"Set MLC Path…";
+			cell.textLabel.textColor = self.view.tintColor;
+			cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+		}
+		return cell;
+	}
+	if (indexPath.section == 3)
 	{
 		if (indexPath.row < (NSInteger)self.gamePaths.count)
 		{
@@ -1050,12 +1116,23 @@ extern "C" void CemuIOS_ShowErrorDialog(const char* message, const char* title)
 
 - (BOOL)tableView:(UITableView*)tableView canEditRowAtIndexPath:(NSIndexPath*)indexPath
 {
-	return indexPath.section == 2 && indexPath.row < (NSInteger)self.gamePaths.count;
+	if (indexPath.section == 2 && !GetConfig().mlc_path.GetValue().empty())
+		return YES; // allow swipe-to-delete on MLC path
+	return indexPath.section == 3 && indexPath.row < (NSInteger)self.gamePaths.count;
 }
 
 - (void)tableView:(UITableView*)tableView commitEditingStyle:(UITableViewCellEditingStyle)editingStyle forRowAtIndexPath:(NSIndexPath*)indexPath
 {
 	if (editingStyle == UITableViewCellEditingStyleDelete && indexPath.section == 2)
+	{
+		// Clear MLC path
+		SaveMLCPathBookmark(nil);
+		GetConfig().SetMLCPath(fs::path(), false);
+		GetConfigHandle().Save();
+		[tableView reloadRowsAtIndexPaths:@[indexPath] withRowAnimation:UITableViewRowAnimationAutomatic];
+		return;
+	}
+	if (editingStyle == UITableViewCellEditingStyleDelete && indexPath.section == 3)
 	{
 		NSMutableArray<NSData*>* bookmarks = [LoadGamePathBookmarks() mutableCopy];
 		if (indexPath.row < (NSInteger)bookmarks.count)
@@ -1075,7 +1152,16 @@ extern "C" void CemuIOS_ShowErrorDialog(const char* message, const char* title)
 	{
 		[self downloadGraphicPacks];
 	}
-	else if (indexPath.section == 2 && indexPath.row == (NSInteger)self.gamePaths.count)
+	else if (indexPath.section == 2 && indexPath.row == 0)
+	{
+		// MLC path picker
+		UIDocumentPickerViewController* picker = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeFolder]];
+		picker.delegate = self;
+		picker.allowsMultipleSelection = NO;
+		objc_setAssociatedObject(picker, "pickerType", @"mlc", OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+		[self presentViewController:picker animated:YES completion:nil];
+	}
+	else if (indexPath.section == 3 && indexPath.row == (NSInteger)self.gamePaths.count)
 	{
 		UIDocumentPickerViewController* picker = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:@[UTTypeFolder]];
 		picker.delegate = self;
@@ -1124,6 +1210,35 @@ extern "C" void CemuIOS_ShowErrorDialog(const char* message, const char* title)
 	NSURL* url = urls.firstObject;
 	if (!url) return;
 	[url startAccessingSecurityScopedResource];
+
+	NSString* pickerType = objc_getAssociatedObject(controller, "pickerType");
+	if ([pickerType isEqualToString:@"mlc"])
+	{
+		// MLC path picked
+		NSError* err = nil;
+		NSData* bookmark = [url bookmarkDataWithOptions:0 includingResourceValuesForKeys:nil relativeToURL:nil error:&err];
+		if (bookmark && !err)
+		{
+			SaveMLCPathBookmark(bookmark);
+			fs::path mlcPath(url.fileSystemRepresentation);
+			GetConfig().SetMLCPath(mlcPath);
+			// Create sys/ and usr/ if needed
+			std::error_code ec;
+			fs::create_directories(mlcPath / "sys", ec);
+			fs::create_directories(mlcPath / "usr", ec);
+			cemuLog_log(LogType::Force, "Set MLC path: {}", url.fileSystemRepresentation);
+			[self.tableView reloadData];
+			// Inform user restart is needed
+			UIAlertController* alert = [UIAlertController alertControllerWithTitle:@"MLC Path Changed"
+				message:@"Please restart the app for the new MLC path to take full effect."
+				preferredStyle:UIAlertControllerStyleAlert];
+			[alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+			[self presentViewController:alert animated:YES completion:nil];
+		}
+		return;
+	}
+
+	// Game path picked
 	NSError* err = nil;
 	NSData* bookmark = [url bookmarkDataWithOptions:0 includingResourceValuesForKeys:nil relativeToURL:nil error:&err];
 	if (bookmark && !err)
