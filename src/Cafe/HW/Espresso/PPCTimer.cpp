@@ -22,6 +22,15 @@ static_assert(sizeof(uint128_t) == 16);
 
 uint128_t _rdtscAcc{};
 
+#if defined(__aarch64__)
+static uint64 PPCTimer_getCounterFrequency()
+{
+	uint64 freq = 0;
+	asm volatile("mrs %0, cntfrq_el0" : "=r"(freq));
+	return freq;
+}
+#endif
+
 uint64 muldiv64(uint64 a, uint64 b, uint64 d)
 {
 	uint64 diva = a / d;
@@ -71,7 +80,17 @@ uint64 PPCTimer_estimateRDTSCFrequency()
 
 int PPCTimer_initThread()
 {
+#if defined(__aarch64__)
+	const uint64 freq = PPCTimer_getCounterFrequency();
+	if (freq != 0)
+	{
+		_rdtscFrequency = freq;
+		return 0;
+	}
+#endif
 	_rdtscFrequency = PPCTimer_estimateRDTSCFrequency();
+	if (_rdtscFrequency == 0)
+		cemuLog_log(LogType::Force, "PPCTimer: failed to determine counter frequency");
 	return 0;
 }
 

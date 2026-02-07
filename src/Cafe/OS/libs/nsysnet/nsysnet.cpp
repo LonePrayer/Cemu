@@ -7,7 +7,7 @@
 
 #include "Common/socket.h"
 
-#if BOOST_OS_UNIX
+#if BOOST_OS_UNIX || BOOST_OS_IOS
 
 #define WSAEWOULDBLOCK EWOULDBLOCK
 #define WSAEINPROGRESS EINPROGRESS

@@ -131,6 +131,7 @@ void SetEntryPoint(MPTR entryPoint)
 void LoadMainExecutable()
 {
 	isLaunchTypeELF = false;
+	cemuLog_log(LogType::Force, "LoadMainExecutable: begin");
 	// when launching from a disc image _pathToExecutable is initially empty
 	if (_pathToExecutable.empty())
 	{
@@ -146,7 +147,9 @@ void LoadMainExecutable()
 	}
 	// extract and load RPX
 	uint32 rpxSize = 0;
+	cemuLog_log(LogType::Force, "LoadMainExecutable: extracting {}", _pathToExecutable);
 	uint8* rpxData = fsc_extractFile(_pathToExecutable.c_str(), &rpxSize);
+	cemuLog_log(LogType::Force, "LoadMainExecutable: extract done (size {})", rpxSize);
 	if (rpxData == nullptr)
 	{
 		cemuLog_log(LogType::Force, "Failed to load \"{}\"", _pathToExecutable);
@@ -159,14 +162,18 @@ void LoadMainExecutable()
 	if (rpxSize >= 10 && memcmp(rpxData, elfHeaderMagic, sizeof(elfHeaderMagic)) == 0)
 	{
 		// ELF
+		cemuLog_log(LogType::Force, "LoadMainExecutable: ELF detected");
 		SetEntryPoint(ELF_LoadFromMemory(rpxData, rpxSize, _pathToExecutable.c_str()));
 		isLaunchTypeELF = true;
 	}
 	else
 	{
 		// RPX
+		cemuLog_log(LogType::Force, "LoadMainExecutable: RPX detected");
 		RPLLoader_AddDependency(_pathToExecutable.c_str());
+		cemuLog_log(LogType::Force, "LoadMainExecutable: loading RPX");
 		applicationRPX = RPLLoader_LoadFromMemory(rpxData, rpxSize, (char*)_pathToExecutable.c_str());
+		cemuLog_log(LogType::Force, "LoadMainExecutable: RPX loaded");
 		if (!applicationRPX)
 		{
 			WindowSystem::ShowErrorDialog(_tr("Failed to run this title because the executable is damaged"));
@@ -365,6 +372,7 @@ uint32 LoadSharedData()
 
 void cemu_initForGame()
 {
+	cemuLog_log(LogType::Force, "cemu_initForGame: start");
 	WindowSystem::UpdateWindowTitles(false, true, 0.0);
 	cemuLog_createLogFile(false);
 	// input manager apply game profile
@@ -385,11 +393,15 @@ void cemu_initForGame()
 	ppcCyclesSince2000TimerClock = ppcCyclesSince2000 / 20ULL;
 	PPCTimer_start();
 	// coreinit is bootstrapped first and then the main game executable is loaded
+	cemuLog_log(LogType::Force, "cemu_initForGame: load coreinit");
 	RPLLoader_LoadCoreinit();
+	cemuLog_log(LogType::Force, "cemu_initForGame: load main executable");
 	LoadMainExecutable();
 	// log info for launched title
+	cemuLog_log(LogType::Force, "cemu_initForGame: info log");
 	InfoLog_TitleLoaded();
 	// link all modules
+	cemuLog_log(LogType::Force, "cemu_initForGame: link modules");
 	uint32 linkTimeStart = GetTickCount();
 	RPLLoader_UpdateDependencies();
 	RPLLoader_Link();
@@ -405,8 +417,10 @@ void cemu_initForGame()
 	else
 	{
 		// replace any known function signatures with our HLE implementations and patch bugs in the games
+		cemuLog_log(LogType::Force, "cemu_initForGame: apply game patches");
 		GamePatch_scan();
 	}
+	cemuLog_log(LogType::Force, "cemu_initForGame: start Latte");
 	LatteGPUState.isDRCPrimary = ActiveSettings::DisplayDRCEnabled();
 	InfoLog_PrintActiveSettings();
 	Latte_Start();
@@ -426,7 +440,9 @@ void cemu_initForGame()
 	// everything initialized
 	cemuLog_log(LogType::Force, "------- Run title -------");
 	// wait till GPU thread is initialized
+	cemuLog_log(LogType::Force, "cemu_initForGame: waiting for GPU init");
 	while (g_isGPUInitFinished == false) std::this_thread::sleep_for(std::chrono::milliseconds(50));
+	cemuLog_log(LogType::Force, "cemu_initForGame: GPU init done");
 	// run coreinit rpl_entry
 	RPLLoader_CallCoreinitEntrypoint();
 	// init AX and start AX I/O thread
@@ -540,6 +556,8 @@ namespace CafeSystem
 			platform = "Linux";
 		#elif BOOST_OS_MACOS
 		platform = "MacOS";
+		#elif BOOST_OS_IOS
+		platform = "iOS";
 		#elif BOOST_OS_BSD
 		#if defined(__FreeBSD__)
 		platform = "FreeBSD";
@@ -551,6 +569,8 @@ namespace CafeSystem
 		platform = "Unknown BSD";
 		#endif
 		#endif
+		if (!platform)
+			platform = "Unknown";
 		cemuLog_log(LogType::Force, "Platform: {}", platform);
 	}
 
@@ -563,6 +583,15 @@ namespace CafeSystem
 		iosu::pdm::GetModule(),
 		iosu::ccr_nfc::GetModule(),
 		iosu::boss::GetModule()
+	};
+	static const char* const s_iosuModuleNames[] =
+	{
+		"kernel",
+		"acp",
+		"fpd",
+		"pdm",
+		"ccr_nfc",
+		"boss"
 	};
 
 	// initialize all subsystems which are persistent and don't depend on a game running
@@ -787,19 +816,26 @@ namespace CafeSystem
 		if (tip.GetType() == TitleIdParser::TITLE_TYPE::AOC || tip.GetType() == TitleIdParser::TITLE_TYPE::BASE_TITLE_UPDATE)
 			cemuLog_log(LogType::Force, "Launched titleId is not the base of a title");
         // mount mlc storage
+		cemuLog_log(LogType::Force, "Mounting base directories");
         MountBaseDirectories();
         // mount title folders
+		cemuLog_log(LogType::Force, "Loading and mounting title");
 		PREPARE_STATUS_CODE r = LoadAndMountForegroundTitle(titleId);
 		if (r != PREPARE_STATUS_CODE::SUCCESS)
 			return r;
 		gameProfile_load();
 		// setup memory space and PPC recompiler
+		cemuLog_log(LogType::Force, "Setting up memory space");
         SetupMemorySpace();
+		cemuLog_log(LogType::Force, "Initializing PPC recompiler");
         PPCRecompiler_init();
+		cemuLog_log(LogType::Force, "Preparing executable");
 		r = PrepareExecutable(); // load RPX
 		if (r != PREPARE_STATUS_CODE::SUCCESS)
 			return r;
+		cemuLog_log(LogType::Force, "Initializing virtual MLC");
 		InitVirtualMlcStorage();
+		cemuLog_log(LogType::Force, "Prepare foreground title complete");
 		return PREPARE_STATUS_CODE::SUCCESS;
 	}
 
@@ -846,21 +882,32 @@ namespace CafeSystem
 		return PREPARE_STATUS_CODE::SUCCESS;
 	}
 
-	void _LaunchTitleThread()
+void _LaunchTitleThread()
+{
+	cemuLog_log(LogType::Force, "LaunchTitleThread: start");
+	for(size_t i = 0; i < s_iosuModules.size(); ++i)
 	{
-		for(auto& module : s_iosuModules)
-			module->TitleStart();
-		cemu_initForGame();
-		// enter scheduler
-		if ((ActiveSettings::GetCPUMode() == CPUMode::MulticoreRecompiler || LaunchSettings::ForceMultiCoreInterpreter()) && !LaunchSettings::ForceInterpreter())
-			coreinit::OSSchedulerBegin(3);
-		else
-			coreinit::OSSchedulerBegin(1);
+		const char* name = (i < (sizeof(s_iosuModuleNames) / sizeof(s_iosuModuleNames[0]))) ? s_iosuModuleNames[i] : "unknown";
+		cemuLog_log(LogType::Force, "LaunchTitleThread: TitleStart module {}", name);
+		s_iosuModules[i]->TitleStart();
+		cemuLog_log(LogType::Force, "LaunchTitleThread: TitleStart module {} done", name);
 	}
+	cemuLog_log(LogType::Force, "LaunchTitleThread: TitleStart complete");
+	cemu_initForGame();
+	cemuLog_log(LogType::Force, "LaunchTitleThread: starting scheduler");
+	// enter scheduler
+	if ((ActiveSettings::GetCPUMode() == CPUMode::MulticoreRecompiler || LaunchSettings::ForceMultiCoreInterpreter()) && !LaunchSettings::ForceInterpreter())
+		coreinit::OSSchedulerBegin(3);
+	else
+		coreinit::OSSchedulerBegin(1);
+	cemuLog_log(LogType::Force, "LaunchTitleThread: scheduler returned");
+}
 
 	void LaunchForegroundTitle()
 	{
+		cemuLog_log(LogType::Force, "LaunchForegroundTitle: waiting for PPCTimer");
 		PPCTimer_waitForInit();
+		cemuLog_log(LogType::Force, "LaunchForegroundTitle: PPCTimer ready");
 		// start system
 		sSystemRunning = true;
 		WindowSystem::NotifyGameLoaded();

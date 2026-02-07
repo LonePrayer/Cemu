@@ -1,3 +1,4 @@
+#if !CEMU_IOS
 #include "BackendLibusb.h"
 
 namespace nsyshid::backend::libusb
@@ -908,3 +909,4 @@ namespace nsyshid::backend::libusb
 		return m_handle;
 	}
 } // namespace nsyshid::backend::libusb
+#endif

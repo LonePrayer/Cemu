@@ -1,3 +1,10 @@
+#if !HAS_OPENGL
+#include "Cafe/HW/Latte/Core/LatteShader.h"
+
+void LatteShader_prepareSeparableUniforms(LatteDecompilerShader* /*shader*/)
+{
+}
+#else
 #include "Common/GLInclude/GLInclude.h"
 #include "Cafe/HW/Latte/Core/Latte.h"
 #include "Cafe/HW/Latte/Core/LatteDraw.h"
@@ -137,7 +144,6 @@ GLuint gpu7ShaderGLDepr_compileFragmentShader(const char* shaderSource, sint32 s
 	}
 	return shaderObject;
 }
-
 GLuint gxShaderDepr_compileRaw(StringBuf* strSourceVS, StringBuf* strSourceFS)
 {
 	GLuint glShaderProgram = glCreateProgram();
@@ -166,3 +172,4 @@ GLuint gxShaderDepr_compileRaw(const std::string& vertex_source, const std::stri
 	glLinkProgram(programm);
 	return gxShader_checkIfSuccessfullyLinked(programm) ? programm : 0;
 }
+#endif

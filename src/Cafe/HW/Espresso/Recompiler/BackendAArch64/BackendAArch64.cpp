@@ -7,6 +7,8 @@
 #include <xbyak_aarch64_util.h>
 
 #include <cstddef>
+#include <memory>
+#include <mutex>
 
 #include "../PPCRecompiler.h"
 #include "Common/precompiled.h"
@@ -60,10 +62,77 @@ static const FPReg TEMP_FPR{TEMP_FPR_ID};
 
 static const util::Cpu s_cpu;
 
+#ifdef CEMU_IOS
+#include <libkern/OSCacheControl.h>
+
+// Pooled JIT allocator for iOS - single large mmap region to avoid VM region limit
+class JitPoolAllocator : public Allocator
+{
+  private:
+	static constexpr size_t POOL_SIZE = 512 * 1024 * 1024; // 512MB JIT pool
+	inline static uint8_t* s_poolBase = nullptr;
+	inline static size_t s_poolOffset = 0;
+	inline static std::mutex s_poolMutex;
+
+	static void ensurePool()
+	{
+		if (s_poolBase)
+			return;
+		// RW pool - individual allocations will be mprotected to RE via CS_DEBUGGED
+		int mode = MAP_PRIVATE | MAP_ANON;
+		void* p = mmap(NULL, POOL_SIZE, PROT_READ | PROT_WRITE, mode, -1, 0);
+		if (p == MAP_FAILED)
+		{
+			cemuLog_log(LogType::Force, "JitPoolAllocator: mmap failed (errno={})", errno);
+			return;
+		}
+		s_poolBase = static_cast<uint8_t*>(p);
+		s_poolOffset = 0;
+		cemuLog_log(LogType::Force, "JitPoolAllocator: {}MB pool at {}", POOL_SIZE / (1024*1024), p);
+	}
+
+  public:
+	uint32_t* alloc(size_t size) override
+	{
+		std::lock_guard<std::mutex> lock(s_poolMutex);
+		ensurePool();
+		if (!s_poolBase)
+			return nullptr;
+		// Page-align for safe mprotect (avoids cross-allocation page sharing)
+		const size_t pageSize = getpagesize();
+		size = (size + pageSize - 1) & ~(pageSize - 1);
+		if (s_poolOffset + size > POOL_SIZE)
+		{
+			cemuLog_log(LogType::Force, "JitPoolAllocator: pool exhausted ({}/{})", s_poolOffset, POOL_SIZE);
+			return nullptr;
+		}
+		uint8_t* ptr = s_poolBase + s_poolOffset;
+		s_poolOffset += size;
+		return reinterpret_cast<uint32_t*>(ptr);
+	}
+
+	void free(uint32_t* p) override
+	{
+		// bump allocator - no individual free
+	}
+
+	bool useProtect() const override
+	{
+		return true; // mprotect to RE works via CS_DEBUGGED
+	}
+};
+#endif
+
+#ifdef CEMU_IOS
+static JitPoolAllocator s_iosAllocator;
+#endif
+
 class AArch64Allocator : public Allocator
 {
   private:
-#ifdef XBYAK_USE_MMAP_ALLOCATOR
+#ifdef CEMU_IOS
+	inline static JitPoolAllocator s_allocator;
+#elif defined(XBYAK_USE_MMAP_ALLOCATOR)
 	inline static MmapAllocator s_allocator;
 #else
 	inline static Allocator s_allocator;
@@ -321,7 +390,11 @@ To aliasAs(const From& reg)
 }
 
 AArch64GenContext_t::AArch64GenContext_t(Allocator* allocator)
+#ifdef CEMU_IOS
+	: CodeGenerator(DEFAULT_MAX_CODE_SIZE, AutoGrow, allocator ? allocator : &s_iosAllocator)
+#else
 	: CodeGenerator(DEFAULT_MAX_CODE_SIZE, AutoGrow, allocator)
+#endif
 {
 }
 
@@ -1437,6 +1510,8 @@ void AArch64GenContext_t::call_imm(IMLInstruction* imlInstruction)
 
 bool PPCRecompiler_generateAArch64Code(struct PPCRecFunction_t* PPCRecFunction, struct ppcImlGenContext_t* ppcImlGenContext)
 {
+	try
+	{
 	AArch64Allocator allocator;
 	AArch64GenContext_t aarch64GenContext{&allocator};
 
@@ -1617,6 +1692,17 @@ bool PPCRecompiler_generateAArch64Code(struct PPCRecFunction_t* PPCRecFunction, 
 	// set free disabled to skip freeing the code from the CodeGenerator destructor
 	allocator.setFreeDisabled(true);
 	return true;
+	}
+	catch (const std::exception& e)
+	{
+		cemuLog_log(LogType::Force, "PPCRecompiler_generateAArch64Code(): exception: {}", e.what());
+		return false;
+	}
+	catch (...)
+	{
+		cemuLog_log(LogType::Force, "PPCRecompiler_generateAArch64Code(): unknown exception");
+		return false;
+	}
 }
 
 void PPCRecompiler_cleanupAArch64Code(void* code, size_t size)
@@ -1671,25 +1757,34 @@ void AArch64GenContext_t::leaveRecompilerCode()
 }
 
 bool initializedInterfaceFunctions = false;
-AArch64GenContext_t enterRecompilerCode_ctx{};
-
-AArch64GenContext_t leaveRecompilerCode_unvisited_ctx{};
-AArch64GenContext_t leaveRecompilerCode_visited_ctx{};
+static std::unique_ptr<AArch64GenContext_t> enterRecompilerCode_ctx;
+static std::unique_ptr<AArch64GenContext_t> leaveRecompilerCode_unvisited_ctx;
+static std::unique_ptr<AArch64GenContext_t> leaveRecompilerCode_visited_ctx;
 void PPCRecompilerAArch64Gen_generateRecompilerInterfaceFunctions()
 {
 	if (initializedInterfaceFunctions)
 		return;
 	initializedInterfaceFunctions = true;
+	cemuLog_log(LogType::Force, "AArch64 recompiler: generating interface functions");
 
-	enterRecompilerCode_ctx.enterRecompilerCode();
-	enterRecompilerCode_ctx.readyRE();
-	PPCRecompiler_enterRecompilerCode = enterRecompilerCode_ctx.getCode<decltype(PPCRecompiler_enterRecompilerCode)>();
+	enterRecompilerCode_ctx = std::make_unique<AArch64GenContext_t>();
+	leaveRecompilerCode_unvisited_ctx = std::make_unique<AArch64GenContext_t>();
+	leaveRecompilerCode_visited_ctx = std::make_unique<AArch64GenContext_t>();
 
-	leaveRecompilerCode_unvisited_ctx.leaveRecompilerCode();
-	leaveRecompilerCode_unvisited_ctx.readyRE();
-	PPCRecompiler_leaveRecompilerCode_unvisited = leaveRecompilerCode_unvisited_ctx.getCode<decltype(PPCRecompiler_leaveRecompilerCode_unvisited)>();
+	cemuLog_log(LogType::Force, "AArch64 recompiler: enterRecompilerCode");
+	enterRecompilerCode_ctx->enterRecompilerCode();
+	enterRecompilerCode_ctx->readyRE();
+	PPCRecompiler_enterRecompilerCode = enterRecompilerCode_ctx->getCode<decltype(PPCRecompiler_enterRecompilerCode)>();
 
-	leaveRecompilerCode_visited_ctx.leaveRecompilerCode();
-	leaveRecompilerCode_visited_ctx.readyRE();
-	PPCRecompiler_leaveRecompilerCode_visited = leaveRecompilerCode_visited_ctx.getCode<decltype(PPCRecompiler_leaveRecompilerCode_visited)>();
+	cemuLog_log(LogType::Force, "AArch64 recompiler: leaveRecompilerCode_unvisited");
+	leaveRecompilerCode_unvisited_ctx->leaveRecompilerCode();
+	leaveRecompilerCode_unvisited_ctx->readyRE();
+	PPCRecompiler_leaveRecompilerCode_unvisited = leaveRecompilerCode_unvisited_ctx->getCode<decltype(PPCRecompiler_leaveRecompilerCode_unvisited)>();
+
+	cemuLog_log(LogType::Force, "AArch64 recompiler: leaveRecompilerCode_visited");
+	leaveRecompilerCode_visited_ctx->leaveRecompilerCode();
+	leaveRecompilerCode_visited_ctx->readyRE();
+	PPCRecompiler_leaveRecompilerCode_visited = leaveRecompilerCode_visited_ctx->getCode<decltype(PPCRecompiler_leaveRecompilerCode_visited)>();
+
+	cemuLog_log(LogType::Force, "AArch64 recompiler: interface functions ready");
 }

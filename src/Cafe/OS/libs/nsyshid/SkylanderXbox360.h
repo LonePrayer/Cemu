@@ -1,5 +1,6 @@
 #pragma once
 
+#if !CEMU_IOS
 #include "nsyshid.h"
 #include "BackendLibusb.h"
 #include "g721/g721.h"
@@ -44,3 +45,4 @@ namespace nsyshid
 	constexpr uint8 XBOX_DATA_HEADER[] = { 0x0B, 0x14 };
 	constexpr uint8 XBOX_AUDIO_DATA_HEADER[] = { 0x0B, 0x17 };
 } // namespace nsyshid
+#endif

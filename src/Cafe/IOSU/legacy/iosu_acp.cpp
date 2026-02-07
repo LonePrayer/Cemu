@@ -796,11 +796,18 @@ namespace iosu
 		{
 			void TitleStart() override
 			{
+#if defined(CEMU_IOS)
+				cemuLog_log(LogType::Force, "ACP service disabled on iOS");
+				return;
+#endif
 				gACPMainService.Start();
 				// gACPMainService.SetTimerUpdate(1000); // call TimerUpdate() once a second
 			}
 			void TitleStop() override
 			{
+#if defined(CEMU_IOS)
+				return;
+#endif
 				gACPMainService.Stop();
 			}
 		}sIOSUModuleNNACP;

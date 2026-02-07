@@ -1,11 +1,12 @@
 #pragma once
+#ifndef HAS_SDL
+#define HAS_SDL 0
+#endif
+
+#if HAS_SDL
 #include <SDL2/SDL_joystick.h>
 #include "input/motion/MotionHandler.h"
 #include "input/api/ControllerProvider.h"
-
-#ifndef HAS_SDL
-#define HAS_SDL 1
-#endif
 
 static bool operator==(const SDL_JoystickGUID& g1, const SDL_JoystickGUID& g2)
 {
@@ -52,3 +53,5 @@ private:
 	std::array<MotionInfoTracking, 8> m_motion_tracking{};
 
 };
+
+#endif // HAS_SDL

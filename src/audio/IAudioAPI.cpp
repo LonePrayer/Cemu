@@ -9,6 +9,9 @@
 #if HAS_CUBEB
 #include "CubebAPI.h"
 #endif
+#if defined(CEMU_IOS)
+#include "CoreAudioAPI.h"
+#endif
 
 std::shared_mutex g_audioMutex;
 AudioAPIPtr g_tvAudio;
@@ -84,7 +87,9 @@ void IAudioAPI::InitializeStatic()
 	if (!s_availableApis[XAudio2]) // don't try to initialize the older lib if the newer version is available
 		s_availableApis[XAudio27] = XAudio27API::InitializeStatic();
 #endif
-#if HAS_CUBEB
+#if defined(CEMU_IOS)
+	s_availableApis[Cubeb] = CoreAudioAPI::InitializeStatic();
+#elif HAS_CUBEB
 	s_availableApis[Cubeb] = CubebAPI::InitializeStatic();
 #endif
 }
@@ -160,8 +165,17 @@ AudioAPIPtr IAudioAPI::CreateDevice(AudioAPI api, const DeviceDescriptionPtr& de
 #if HAS_CUBEB
 	case Cubeb:
 	{
+#if defined(CEMU_IOS)
+		return std::make_unique<CoreAudioAPI>(samplerate, channels, samples_per_block, bits_per_sample);
+#else
 		const auto tmp = std::dynamic_pointer_cast<CubebAPI::CubebDeviceDescription>(device);
 		return std::make_unique<CubebAPI>(tmp->GetDeviceId(), samplerate, channels, samples_per_block, bits_per_sample);
+#endif
+	}
+#elif defined(CEMU_IOS)
+	case Cubeb:
+	{
+		return std::make_unique<CoreAudioAPI>(samplerate, channels, samples_per_block, bits_per_sample);
 	}
 #endif
 	default:
@@ -193,7 +207,16 @@ std::vector<IAudioAPI::DeviceDescriptionPtr> IAudioAPI::GetDevices(AudioAPI api)
 #if HAS_CUBEB
 	case Cubeb:
 	{
+#if defined(CEMU_IOS)
+		return CoreAudioAPI::GetDevices();
+#else
 		return CubebAPI::GetDevices();
+#endif
+	}
+#elif defined(CEMU_IOS)
+	case Cubeb:
+	{
+		return CoreAudioAPI::GetDevices();
 	}
 #endif
 	default:

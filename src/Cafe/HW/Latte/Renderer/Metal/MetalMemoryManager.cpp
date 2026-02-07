@@ -40,6 +40,10 @@ void MetalMemoryManager::InitBufferCache(size_t size)
 
     if (m_metalBufferCacheMode == MetalBufferCacheMode::Auto)
     {
+#ifdef CEMU_IOS
+        // iOS: always use DeviceShared (unified memory, avoids staging buffer issues)
+        m_metalBufferCacheMode = MetalBufferCacheMode::DeviceShared;
+#else
         // TODO: do this for all unified memory systems?
         if (m_mtlr->IsAppleGPU())
         {
@@ -61,6 +65,7 @@ void MetalMemoryManager::InitBufferCache(size_t size)
         {
             m_metalBufferCacheMode = MetalBufferCacheMode::DevicePrivate;
         }
+#endif
     }
 
     // First, try to import the host memory as a buffer

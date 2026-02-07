@@ -18,7 +18,11 @@ struct MetalPixelFormatSupport
         m_supportsR8Unorm_sRGB = device->supportsFamily(MTL::GPUFamilyApple1);
         m_supportsRG8Unorm_sRGB = device->supportsFamily(MTL::GPUFamilyApple1);
         m_supportsPacked16BitFormats = device->supportsFamily(MTL::GPUFamilyApple1);
+#if defined(CEMU_IOS)
+        m_supportsDepth24Unorm_Stencil8 = false; // Not available on iOS
+#else
         m_supportsDepth24Unorm_Stencil8 = device->depth24Stencil8PixelFormatSupported();
+#endif
 	}
 };
 
@@ -106,6 +110,12 @@ inline bool FormatIsRenderable(Latte::E_GX2SURFFMT format)
 
 template <typename... T>
 inline bool executeCommand(fmt::format_string<T...> fmt, T&&... args) {
+#if defined(CEMU_IOS)
+    (void)fmt;
+    (void)sizeof...(args);
+    cemuLog_log(LogType::Force, "command execution is not supported on iOS");
+    return false;
+#else
     std::string command = fmt::format(fmt, std::forward<T>(args)...);
     int res = system(command.c_str());
     if (res != 0)
@@ -115,6 +125,7 @@ inline bool executeCommand(fmt::format_string<T...> fmt, T&&... args) {
     }
 
     return true;
+#endif
 }
 
 /*

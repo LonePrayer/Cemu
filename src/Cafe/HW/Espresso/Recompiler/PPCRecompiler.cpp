@@ -702,16 +702,31 @@ void PPCRecompiler_init()
 		ppcRecompilerInstanceData = nullptr;
 	}
 	debug_printf("Allocating %dMB for recompiler instance data...\n", (sint32)(sizeof(PPCRecompilerInstanceData_t) / 1024 / 1024));
+	cemuLog_log(LogType::Force, "PPCRecompiler_init: allocating {}MB instance data", (sint32)(sizeof(PPCRecompilerInstanceData_t) / 1024 / 1024));
 	ppcRecompilerInstanceData = (PPCRecompilerInstanceData_t*)MemMapper::ReserveMemory(nullptr, sizeof(PPCRecompilerInstanceData_t), MemMapper::PAGE_PERMISSION::P_RW);
+	cemuLog_log(LogType::Force, "PPCRecompiler_init: ReserveMemory returned {}", (void*)ppcRecompilerInstanceData);
+	if (ppcRecompilerInstanceData == nullptr || (uintptr_t)ppcRecompilerInstanceData == (uintptr_t)-1)
+	{
+		cemuLog_log(LogType::Force, "PPCRecompiler_init: CRITICAL - failed to reserve memory, recompiler disabled");
+		ppcRecompilerInstanceData = nullptr;
+		ppcRecompilerEnabled = false;
+		return;
+	}
 	MemMapper::AllocateMemory(&(ppcRecompilerInstanceData->_x64XMM_xorNegateMaskBottom), sizeof(PPCRecompilerInstanceData_t) - offsetof(PPCRecompilerInstanceData_t, _x64XMM_xorNegateMaskBottom), MemMapper::PAGE_PERMISSION::P_RW, true);
+	cemuLog_log(LogType::Force, "PPCRecompiler_init: AllocateMemory done");
+	cemuLog_log(LogType::Force, "PPCRecompiler_init: generating interface functions");
 #ifdef ARCH_X86_64
 	PPCRecompilerX64Gen_generateRecompilerInterfaceFunctions();
 #elif defined(__aarch64__)
 	PPCRecompilerAArch64Gen_generateRecompilerInterfaceFunctions();
 #endif
+	cemuLog_log(LogType::Force, "PPCRecompiler_init: allocateRange 0..0x1000");
     PPCRecompiler_allocateRange(0, 0x1000); // the first entry is used for fallback to interpreter
+	cemuLog_log(LogType::Force, "PPCRecompiler_init: allocateRange TRAMPOLINE");
     PPCRecompiler_allocateRange(mmuRange_TRAMPOLINE_AREA.getBase(), mmuRange_TRAMPOLINE_AREA.getSize());
+	cemuLog_log(LogType::Force, "PPCRecompiler_init: allocateRange CODECAVE");
     PPCRecompiler_allocateRange(mmuRange_CODECAVE.getBase(), mmuRange_CODECAVE.getSize());
+	cemuLog_log(LogType::Force, "PPCRecompiler_init: platform init");
 
     PPCRecompiler_initPlatform();
     

@@ -1415,11 +1415,18 @@ namespace iosu::boss
 	{
 		void TitleStart() override
 		{
+#if defined(CEMU_IOS)
+			cemuLog_log(LogType::Force, "BOSS service disabled on iOS");
+			return;
+#endif
 			s_bossService.Start();
 			s_bossDaemon.Start();
 		}
 		void TitleStop() override
 		{
+#if defined(CEMU_IOS)
+			return;
+#endif
 			s_bossService.Stop();
 			m_fadDb.Clear();
 			m_nsDataAccessor.Close();

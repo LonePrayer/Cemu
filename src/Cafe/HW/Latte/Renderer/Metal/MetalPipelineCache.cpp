@@ -58,6 +58,9 @@ static void initCompileThread()
 		numCompileThreads = 2 + (cpuCoreCount - 3); // 2 plus one additionally for every extra core above 3
 
 	numCompileThreads = std::min(numCompileThreads, 8u); // cap at 8
+#if defined(CEMU_IOS)
+	numCompileThreads = std::min(numCompileThreads, 4u); // balance parallelism vs XPC stability
+#endif
 
 	for (uint32 i = 0; i < numCompileThreads; i++)
 	{
@@ -121,32 +124,39 @@ PipelineObject* MetalPipelineCache::GetRenderPipelineState(const LatteFetchShade
 
     pipelineObj = new PipelineObject();
 
-    MetalPipelineCompiler* compiler = new MetalPipelineCompiler(m_mtlr, *pipelineObj);
-    compiler->InitFromState(fetchShader, vertexShader, geometryShader, pixelShader, lastUsedAttachmentsInfo, activeAttachmentsInfo, lcr);
+    try
+    {
+        MetalPipelineCompiler* compiler = new MetalPipelineCompiler(m_mtlr, *pipelineObj);
+        compiler->InitFromState(fetchShader, vertexShader, geometryShader, pixelShader, lastUsedAttachmentsInfo, activeAttachmentsInfo, lcr);
 
-    bool allowAsyncCompile = false;
-    if (GetConfig().async_compile)
-		allowAsyncCompile = IsAsyncPipelineAllowed(activeAttachmentsInfo, extend, indexCount);
+        bool allowAsyncCompile = false;
+        if (GetConfig().async_compile)
+            allowAsyncCompile = IsAsyncPipelineAllowed(activeAttachmentsInfo, extend, indexCount);
 
-	if (allowAsyncCompile)
-	{
-	    if (!g_compilePipelineThreadInit)
-		{
-			initCompileThread();
-			g_compilePipelineThreadInit = true;
-		}
+        if (allowAsyncCompile)
+        {
+            if (!g_compilePipelineThreadInit)
+            {
+                initCompileThread();
+                g_compilePipelineThreadInit = true;
+            }
 
-		queuePipeline(compiler);
-	}
-	else
-	{
-	    // Also force compile to ensure that the pipeline is ready
-        cemu_assert_debug(compiler->Compile(true, true, true));
-        delete compiler;
-	}
+            queuePipeline(compiler);
+        }
+        else
+        {
+            // Also force compile to ensure that the pipeline is ready
+            cemu_assert_debug(compiler->Compile(true, true, true));
+            delete compiler;
+        }
 
-	// Save to cache
-    AddCurrentStateToCache(hash, lastUsedAttachmentsInfo);
+        // Save to cache
+        AddCurrentStateToCache(hash, lastUsedAttachmentsInfo);
+    }
+    catch (const std::exception& e)
+    {
+        cemuLog_log(LogType::Force, "Pipeline compilation exception: {}", e.what());
+    }
 
     return pipelineObj;
 }

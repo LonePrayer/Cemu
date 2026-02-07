@@ -1,3 +1,4 @@
+#if !CEMU_IOS
 #include "SkylanderXbox360.h"
 
 namespace nsyshid
@@ -158,3 +159,4 @@ namespace nsyshid
 		return true;
 	}
 } // namespace nsyshid
+#endif

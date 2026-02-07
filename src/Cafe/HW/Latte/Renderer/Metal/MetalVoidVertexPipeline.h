@@ -12,5 +12,5 @@ public:
     MTL::RenderPipelineState* GetRenderPipelineState() const { return m_renderPipelineState; }
 
 private:
-    MTL::RenderPipelineState* m_renderPipelineState;
+    MTL::RenderPipelineState* m_renderPipelineState = nullptr;
 };

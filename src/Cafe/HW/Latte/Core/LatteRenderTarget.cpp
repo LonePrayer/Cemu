@@ -683,6 +683,26 @@ void LatteRenderTarget_trackUpdates()
 
 void LatteRenderTarget_itHLESwapScanBuffer()
 {
+#if defined(CEMU_IOS)
+	extern std::atomic<uint32_t> g_cemuFrameCounter;
+	g_cemuFrameCounter.fetch_add(1, std::memory_order_relaxed);
+	// Frame limiter: enforce minimum frame time to prevent game speedup on iOS
+	// Use swapInterval to determine target: swapInterval=1 → 60fps, =2 → 30fps
+	{
+		static auto s_lastSwapTime = std::chrono::steady_clock::now();
+		auto now = std::chrono::steady_clock::now();
+		auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(now - s_lastSwapTime);
+		uint32 swapInterval = 1;
+		if (LatteGPUState.sharedArea)
+			swapInterval = std::max((uint32)1, (uint32)LatteGPUState.sharedArea->swapInterval);
+		auto targetFrameTime = std::chrono::microseconds(16667 * swapInterval); // 16.667ms * swapInterval
+		if (elapsed < targetFrameTime)
+		{
+			std::this_thread::sleep_for(targetFrameTime - elapsed);
+		}
+		s_lastSwapTime = std::chrono::steady_clock::now();
+	}
+#endif
 	performanceMonitor.cycle[performanceMonitor.cycleIndex].frameCounter++;
 	if(LatteGPUState.frameCounter > 5)
 		performanceMonitor.gpuTime_frameTime.endMeasuring();
@@ -975,12 +995,12 @@ void LatteRenderTarget_copyToBackbuffer(LatteTextureView* textureView, bool isPa
 
 void LatteRenderTarget_itHLECopyColorBufferToScanBuffer(MPTR colorBufferPtr, uint32 colorBufferWidth, uint32 colorBufferHeight, uint32 colorBufferSliceIndex, uint32 colorBufferFormat, uint32 colorBufferPitch, Latte::E_HWTILEMODE colorBufferTilemode, uint32 colorBufferSwizzle, uint32 renderTarget)
 {
+	static uint32 s_copyScanCount = 0;
+	s_copyScanCount++;
 	cemu_assert_debug(colorBufferSliceIndex == 0); // todo - support for non-zero slice
 	LatteTextureView* texView = LatteTC_GetTextureSliceViewOrTryCreate(colorBufferPtr, MPTR_NULL, (Latte::E_GX2SURFFMT)colorBufferFormat, colorBufferTilemode, colorBufferWidth, colorBufferHeight, 1, colorBufferPitch, colorBufferSwizzle, 0, 0, true);
 	if (!texView)
-	{
 		return;
-	}
 
 	auto getVPADScreenActive = [](size_t n) -> std::pair<bool, bool> {
 		auto controller = InputManager::instance().get_vpad_controller(n);

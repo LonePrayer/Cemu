@@ -1,6 +1,11 @@
 #include "input/emulated/VPADController.h"
 #include "input/api/Controller.h"
+#if HAS_SDL
 #include "input/api/SDL/SDLController.h"
+#endif
+#if defined(CEMU_IOS)
+#include "input/api/iOSController.h"
+#endif
 #include "WindowSystem.h"
 #include "input/InputManager.h"
 #include "Cafe/HW/Latte/Core/Latte.h"
@@ -76,36 +81,50 @@ void VPADController::VPADRead(VPADStatus_t& status, const BtnRepeat& repeat)
 	m_homebutton_down |= is_home_down();
 
 	const auto axis = get_axis();
-	status.leftStick.x = axis.x;
-	status.leftStick.y = axis.y;
+	const auto rotation = get_rotation();
+
+#if defined(CEMU_IOS)
+	// Inject iOS GCController state directly (overrides mapped controller)
+	if (g_iosControllerState.connected.load(std::memory_order_relaxed))
+	{
+		status.hold |= g_iosControllerState.hold.load(std::memory_order_relaxed);
+		status.leftStick.x = g_iosControllerState.leftStickX.load(std::memory_order_relaxed);
+		status.leftStick.y = g_iosControllerState.leftStickY.load(std::memory_order_relaxed);
+		status.rightStick.x = g_iosControllerState.rightStickX.load(std::memory_order_relaxed);
+		status.rightStick.y = g_iosControllerState.rightStickY.load(std::memory_order_relaxed);
+	}
+	else
+#endif
+	{
+		status.leftStick.x = axis.x;
+		status.leftStick.y = axis.y;
+		status.rightStick.x = rotation.x;
+		status.rightStick.y = rotation.y;
+	}
 
 	constexpr float kAxisThreshold = 0.5f;
 	constexpr float kHoldAxisThreshold = 0.1f;
 	const uint32 last_hold = m_last_holdvalue;
 
-	if (axis.x <= -kAxisThreshold || (HAS_FLAG(last_hold, VPAD_STICK_L_LEFT) && axis.x <= -kHoldAxisThreshold))
+	if (status.leftStick.x <= -kAxisThreshold || (HAS_FLAG(last_hold, VPAD_STICK_L_LEFT) && status.leftStick.x <= -kHoldAxisThreshold))
 		status.hold |= VPAD_STICK_L_LEFT;
-	else if (axis.x >= kAxisThreshold || (HAS_FLAG(last_hold, VPAD_STICK_L_RIGHT) && axis.x >= kHoldAxisThreshold))
+	else if (status.leftStick.x >= kAxisThreshold || (HAS_FLAG(last_hold, VPAD_STICK_L_RIGHT) && status.leftStick.x >= kHoldAxisThreshold))
 		status.hold |= VPAD_STICK_L_RIGHT;
 
-	if (axis.y <= -kAxisThreshold || (HAS_FLAG(last_hold, VPAD_STICK_L_DOWN) && axis.y <= -kHoldAxisThreshold))
+	if (status.leftStick.y <= -kAxisThreshold || (HAS_FLAG(last_hold, VPAD_STICK_L_DOWN) && status.leftStick.y <= -kHoldAxisThreshold))
 		status.hold |= VPAD_STICK_L_DOWN;
-	else if (axis.y >= kAxisThreshold || (HAS_FLAG(last_hold, VPAD_STICK_L_UP) && axis.y >= kHoldAxisThreshold))
+	else if (status.leftStick.y >= kAxisThreshold || (HAS_FLAG(last_hold, VPAD_STICK_L_UP) && status.leftStick.y >= kHoldAxisThreshold))
 		status.hold |= VPAD_STICK_L_UP;
 
-	const auto rotation = get_rotation();
-	status.rightStick.x = rotation.x;
-	status.rightStick.y = rotation.y;
-
-	if (rotation.x <= -kAxisThreshold || (HAS_FLAG(last_hold, VPAD_STICK_R_LEFT) && rotation.x <= -kHoldAxisThreshold))
+	if (status.rightStick.x <= -kAxisThreshold || (HAS_FLAG(last_hold, VPAD_STICK_R_LEFT) && status.rightStick.x <= -kHoldAxisThreshold))
 		status.hold |= VPAD_STICK_R_LEFT;
-	else if (rotation.x >= kAxisThreshold || (HAS_FLAG(last_hold, VPAD_STICK_R_RIGHT) && rotation.x >=
+	else if (status.rightStick.x >= kAxisThreshold || (HAS_FLAG(last_hold, VPAD_STICK_R_RIGHT) && status.rightStick.x >=
 		kHoldAxisThreshold))
 		status.hold |= VPAD_STICK_R_RIGHT;
 
-	if (rotation.y <= -kAxisThreshold || (HAS_FLAG(last_hold, VPAD_STICK_R_DOWN) && rotation.y <= -kHoldAxisThreshold))
+	if (status.rightStick.y <= -kAxisThreshold || (HAS_FLAG(last_hold, VPAD_STICK_R_DOWN) && status.rightStick.y <= -kHoldAxisThreshold))
 		status.hold |= VPAD_STICK_R_DOWN;
-	else if (rotation.y >= kAxisThreshold || (HAS_FLAG(last_hold, VPAD_STICK_R_UP) && rotation.y >= kHoldAxisThreshold))
+	else if (status.rightStick.y >= kAxisThreshold || (HAS_FLAG(last_hold, VPAD_STICK_R_UP) && status.rightStick.y >= kHoldAxisThreshold))
 		status.hold |= VPAD_STICK_R_UP;
 
 	// button repeat
@@ -510,6 +529,7 @@ bool VPADController::set_default_mapping(const std::shared_ptr<ControllerBase>& 
 	std::vector<std::pair<uint64, uint64>> mapping;
 	switch (controller->api())
 	{
+	#if HAS_SDL
 	case InputAPI::SDLController: {
 		const auto sdl_controller = std::static_pointer_cast<SDLController>(controller);
 		if (sdl_controller->get_guid() == SDLController::kLeftJoyCon)
@@ -633,6 +653,7 @@ bool VPADController::set_default_mapping(const std::shared_ptr<ControllerBase>& 
 		}
 		break;
 	}
+#endif
 	case InputAPI::XInput:
 	{
 		mapping =

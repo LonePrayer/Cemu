@@ -52,7 +52,7 @@ void nnNfp_update();
 
 namespace coreinit
 {
-#ifdef __arm64__
+#if defined(__arm64__) && !defined(CEMU_IOS)
 	void __OSFiberThreadEntry(uint32, uint32);
 #else
 	void __OSFiberThreadEntry(void* thread);
@@ -1252,6 +1252,7 @@ namespace coreinit
 	{
 		bool isMainCore = g_isMulticoreMode == false || t_assignedCoreIndex == 1;
 		sint32 coreIndex = t_assignedCoreIndex;
+		cemuLog_log(LogType::Force, "OSSched[core={}]: entered idle loop (isMainCore={})", coreIndex, isMainCore);
 		__OSUnlockScheduler();
 		while (true)
 		{
@@ -1338,7 +1339,7 @@ namespace coreinit
 		__OSThreadStartTimeslice(hostThread->m_thread, &hostThread->ppcInstance);
 	}
 
-#ifdef __arm64__
+#if defined(__arm64__) && !defined(CEMU_IOS)
 	void __OSFiberThreadEntry(uint32 _high, uint32 _low)
 	{
 		uint64 _thread = (uint64) _high << 32 | _low;
@@ -1394,6 +1395,7 @@ namespace coreinit
 	{
 		SetThreadName(fmt::format("OSSched[core={}]", (uintptr_t)_assignedCoreIndex).c_str());
 		t_assignedCoreIndex = (sint32)(uintptr_t)_assignedCoreIndex;
+		cemuLog_log(LogType::Force, "OSSched[core={}]: thread started", t_assignedCoreIndex);
 
 		enableFlushDenormalsToZero();
 
@@ -1413,12 +1415,16 @@ namespace coreinit
 #endif
 
 		t_schedulerFiber = Fiber::PrepareCurrentThread();
+		cemuLog_log(LogType::Force, "OSSched[core={}]: fiber prepared, creating idle fiber", t_assignedCoreIndex);
 
 		// create scheduler idle fiber and switch to it
 		g_idleLoopFiber[t_assignedCoreIndex] = new Fiber(__OSThreadCoreIdle, nullptr, nullptr);
+		cemuLog_log(LogType::Force, "OSSched[core={}]: idle fiber created, locking scheduler", t_assignedCoreIndex);
 		cemu_assert_debug(PPCInterpreter_getCurrentInstance() == nullptr);
 		__OSLockScheduler();
+		cemuLog_log(LogType::Force, "OSSched[core={}]: scheduler locked, switching to idle fiber", t_assignedCoreIndex);
 		Fiber::Switch(*g_idleLoopFiber[t_assignedCoreIndex]);
+		cemuLog_log(LogType::Force, "OSSched[core={}]: returned from scheduler loop, exiting", t_assignedCoreIndex);
 		// returned from scheduler loop, exit thread
 		cemu_assert_debug(!__OSHasSchedulerLock());
 	}
@@ -1433,6 +1439,7 @@ namespace coreinit
 	// starts PPC core emulation
 	void OSSchedulerBegin(sint32 numCPUEmulationThreads)
 	{
+		cemuLog_log(LogType::Force, "OSSchedulerBegin: starting {} cores", numCPUEmulationThreads);
 		std::unique_lock _lock(sSchedulerStateMtx);
 		if (sSchedulerActive.exchange(true))
 			return;
@@ -1443,12 +1450,16 @@ namespace coreinit
 		else if (numCPUEmulationThreads == 3)
 		{
 			for (size_t i = 0; i < 3; i++)
+			{
+				cemuLog_log(LogType::Force, "OSSchedulerBegin: creating thread for core {}", i);
 				sSchedulerThreads.emplace_back(OSSchedulerCoreEmulationThread, (void*)i);
+			}
 		}
 		else
 			cemu_assert_debug(false);
 		for (auto& it : sSchedulerThreads)
 			g_schedulerThreadHandles.emplace_back(it.native_handle());
+		cemuLog_log(LogType::Force, "OSSchedulerBegin: all threads created");
 	}
 
     // shuts down all scheduler host threads and deletes all fibers and ppc threads

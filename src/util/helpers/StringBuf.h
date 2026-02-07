@@ -6,9 +6,15 @@ public:
 	StringBuf(uint32 bufferSize)
 	{
 		this->str = (uint8*)malloc(bufferSize + 4);
+		if (!this->str)
+		{
+			// Fallback to smaller allocation
+			bufferSize = std::min(bufferSize, (uint32)(1024 * 1024));
+			this->str = (uint8*)malloc(bufferSize + 4);
+		}
 		this->allocated = true;
 		this->length = 0;
-		this->limit = bufferSize;
+		this->limit = this->str ? bufferSize : 0;
 	}
 
 	~StringBuf()
@@ -20,12 +26,24 @@ public:
 	template<typename TFmt, typename ... TArgs>
 	void addFmt(const TFmt& format, TArgs&&... args)
 	{
-		auto r = fmt::vformat_to_n((char*)(this->str + this->length), (size_t)(this->limit - this->length), fmt::detail::to_string_view(format), fmt::make_format_args(args...));
-		this->length += (uint32)r.size;
+		if (!this->str)
+			return;
+		size_t remaining = (this->length < this->limit) ? (size_t)(this->limit - this->length) : 0;
+		auto r = fmt::vformat_to_n((char*)(this->str + this->length), remaining, fmt::detail::to_string_view(format), fmt::make_format_args(args...));
+		if ((uint32)r.size > remaining)
+		{
+			// Buffer too small, grow and retry
+			_reserve(std::max<uint32>(this->length + (uint32)r.size + 64, this->limit + this->limit / 2));
+			remaining = (size_t)(this->limit - this->length);
+			r = fmt::vformat_to_n((char*)(this->str + this->length), remaining, fmt::detail::to_string_view(format), fmt::make_format_args(args...));
+		}
+		this->length += (uint32)std::min((size_t)r.size, remaining);
 	}
 
 	void add(const char* appendedStr)
 	{
+		if (!this->str)
+			return;
 		const char* outputStart = (char*)(this->str + this->length);
 		char* output = (char*)outputStart;
 		const char* outputEnd = (char*)(this->str + this->limit - 1);

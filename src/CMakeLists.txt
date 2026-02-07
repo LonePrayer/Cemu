@@ -13,11 +13,18 @@ if(MSVC)
 	add_compile_definitions(WIN32_LEAN_AND_MEAN CURL_STATICLIB)
 elseif(UNIX)
 	if(APPLE)
-		add_compile_definitions(
-			_XOPEN_SOURCE
-			VK_USE_PLATFORM_MACOS_MVK
-			VK_USE_PLATFORM_METAL_EXT
-		)
+		if(CEMU_IOS)
+			add_compile_definitions(
+				_XOPEN_SOURCE
+				VK_USE_PLATFORM_METAL_EXT
+			)
+		else()
+			add_compile_definitions(
+				_XOPEN_SOURCE
+				VK_USE_PLATFORM_MACOS_MVK
+				VK_USE_PLATFORM_METAL_EXT
+			)
+		endif()
 	else()
 		add_compile_definitions(
 			VK_USE_PLATFORM_XLIB_KHR # legacy. Do we need to support XLIB surfaces?
@@ -54,6 +61,57 @@ add_executable(CemuBin
 	main.cpp
 	mainLLE.cpp
 )
+
+if (CEMU_IOS)
+	add_executable(CemuIOSApp MACOSX_BUNDLE
+		ios/CemuIOSApp.mm
+	)
+
+	file(GLOB_RECURSE IOS_RESOURCE_FILES
+		LIST_DIRECTORIES false
+		"${CMAKE_SOURCE_DIR}/bin/resources/*"
+		"${CMAKE_SOURCE_DIR}/bin/gameProfiles/*"
+	)
+	foreach(resource ${IOS_RESOURCE_FILES})
+		file(RELATIVE_PATH resource_path "${CMAKE_SOURCE_DIR}/bin" "${resource}")
+		get_filename_component(resource_dir "${resource_path}" DIRECTORY)
+		if(resource_dir STREQUAL ".")
+			set(resource_dir "")
+		endif()
+		set_source_files_properties(${resource} PROPERTIES MACOSX_PACKAGE_LOCATION "Resources/data/${resource_dir}")
+	endforeach()
+	target_sources(CemuIOSApp PRIVATE ${IOS_RESOURCE_FILES})
+
+	set_target_properties(CemuIOSApp PROPERTIES
+		MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/ios/Info.plist"
+		XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "info.cemu.cemuios"
+		XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2"
+		XCODE_ATTRIBUTE_OTHER_CODE_SIGN_FLAGS "--identifier $(PRODUCT_BUNDLE_IDENTIFIER)"
+		XCODE_ATTRIBUTE_INFOPLIST_FILE "${CMAKE_CURRENT_SOURCE_DIR}/ios/Info.plist"
+		XCODE_ATTRIBUTE_GENERATE_INFOPLIST_FILE "NO"
+		XCODE_ATTRIBUTE_CODE_SIGN_ENTITLEMENTS "${CMAKE_CURRENT_SOURCE_DIR}/ios/CemuIOS.entitlements"
+	)
+
+	target_link_libraries(CemuIOSApp PRIVATE
+		CemuAudio
+		CemuCafe
+		CemuCommon
+		CemuComponents
+		CemuConfig
+		CemuGui
+		CemuInput
+		CemuResource
+		CemuUtil
+		CURL::libcurl
+		libzip::zip
+		"-framework Foundation"
+		"-framework CoreGraphics"
+		"-framework UIKit"
+		"-framework Metal"
+		"-framework QuartzCore"
+		"-framework UniformTypeIdentifiers"
+	)
+endif()
 
 if(MSVC AND MSVC_VERSION EQUAL 1940)
 	# workaround for an msvc issue on VS 17.10 where generated ILK files are too large
@@ -155,8 +213,11 @@ target_link_libraries(CemuBin PRIVATE
 	CemuGui
 	CemuInput
 	CemuUtil
-	SDL2::SDL2
 )
+
+if (ENABLE_SDL)
+	target_link_libraries(CemuBin PRIVATE SDL2::SDL2)
+endif()
 
 if(UNIX AND NOT APPLE)
 	# due to nasm output some linkers will make stack executable

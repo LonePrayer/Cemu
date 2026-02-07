@@ -647,7 +647,41 @@ uint8* fsc_extractFile(const char* path, uint32* fileSize, sint32 maxPriority)
 	}
 	uint32 fscFileSize = fsc_getFileSize(fscFile);
 	*fileSize = fscFileSize;
+#if defined(CEMU_IOS)
+	cemuLog_log(LogType::Force, "fsc_extractFile: size {} for {}", fscFileSize, path);
+#endif
 	uint8* fileMem = (uint8*)malloc(fscFileSize);
+	if (!fileMem)
+	{
+#if defined(CEMU_IOS)
+		cemuLog_log(LogType::Force, "fsc_extractFile: allocation failed for {}", path);
+#endif
+		fsc_close(fscFile);
+		*fileSize = 0;
+		fscLeave();
+		return nullptr;
+	}
+#if defined(CEMU_IOS)
+	uint32 readOffset = 0;
+	while (readOffset < fscFileSize)
+	{
+		uint32 stepReadSize = std::min(fscFileSize - readOffset, (uint32)1024 * 1024 * 32);
+		cemuLog_log(LogType::Force, "fsc_extractFile: reading {} bytes at {}", stepReadSize, readOffset);
+		cemuLog_waitForFlush();
+		uint32 numBytesRead = fsc_readFile(fscFile, fileMem + readOffset, stepReadSize);
+		if (numBytesRead != stepReadSize)
+		{
+			free(fileMem);
+			fsc_close(fscFile);
+			*fileSize = 0;
+			fscLeave();
+			return nullptr;
+		}
+		readOffset += stepReadSize;
+		cemuLog_log(LogType::Force, "fsc_extractFile: read {}/{}", readOffset, fscFileSize);
+		cemuLog_waitForFlush();
+	}
+#else
 	if( fsc_readFile(fscFile, fileMem, fscFileSize) != fscFileSize )
 	{
 		free(fileMem);
@@ -656,6 +690,7 @@ uint8* fsc_extractFile(const char* path, uint32* fileSize, sint32 maxPriority)
 		fscLeave();
 		return nullptr;
 	}
+#endif
 	fsc_close(fscFile);
 	fscLeave();
 	return fileMem;

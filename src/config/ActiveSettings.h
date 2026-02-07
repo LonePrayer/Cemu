@@ -12,6 +12,11 @@ private:
 	static fs::path GetPath(const fs::path& path, std::string_view format, TArgs&&... args)
 	{
 		cemu_assert_debug(format.empty() || (format[0] != '/' && format[0] != '\\'));
+		if constexpr (sizeof...(TArgs) == 0)
+		{
+			std::basic_string_view<char8_t> s((const char8_t*)format.data(), format.size());
+			return path / fs::path(s);
+		}
 		std::string tmpPathStr = fmt::format(fmt::runtime(format), std::forward<TArgs>(args)...);
 		return path / _utf8ToPath(tmpPathStr);
 	}
@@ -20,6 +25,8 @@ private:
 	static fs::path GetPath(const fs::path& path, std::wstring_view format, TArgs&&... args)
 	{
 		cemu_assert_debug(format.empty() || (format[0] != L'/' && format[0] != L'\\'));
+		if constexpr (sizeof...(TArgs) == 0)
+			return path / std::wstring(format);
 		return path / fmt::format(fmt::runtime(format), std::forward<TArgs>(args)...);
 	}
 	static fs::path GetPath(const fs::path& path, std::string_view p) 
@@ -141,4 +148,3 @@ private:
 
 	inline static bool s_has_required_online_files = false;
 };
-

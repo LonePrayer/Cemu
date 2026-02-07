@@ -1360,9 +1360,13 @@ void LatteCP_ProcessRingbuffer()
 {
 	sint32 timerRecheck = 0; // estimates how much CP processing time has elapsed based on the executed commands, if the value exceeds CP_TIMER_RECHECK then _handleTimers() is called
 	uint32be tmpBuffer[128];
+	static uint64 s_cpCmdCount = 0;
 	while (true)
 	{
 		uint32 itHeader = LatteCP_readU32Deprc();
+		s_cpCmdCount++;
+		if ((s_cpCmdCount & 0xFFFFF) == 0)
+			cemuLog_log(LogType::Force, "LatteCP: processed {} commands", s_cpCmdCount);
 		uint32 itHeaderType = (itHeader >> 30) & 3;
 		if (itHeaderType == 3)
 		{

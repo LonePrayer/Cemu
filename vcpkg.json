@@ -11,7 +11,10 @@
       "default-features": false
     },
     "rapidjson",
-    "sdl2",
+    {
+      "name": "sdl2",
+      "platform": "!ios"
+    },
     "boost-tokenizer",
     "boost-container",
     "boost-program-options",
@@ -29,15 +32,22 @@
       "name": "fmt",
       "version>=": "12.1.0"
     },
-    "hidapi",
+    {
+      "name": "hidapi",
+      "platform": "!ios"
+    },
     "libpng",
     "glm",
     {
       "name": "glslang",
-      "default-features": false
+      "default-features": false,
+      "platform": "!ios"
     },
     "zstd",
-    "wxwidgets",
+    {
+      "name": "wxwidgets",
+      "platform": "!ios"
+    },
     "openssl",
     {
       "name": "curl",
@@ -59,7 +69,10 @@
         "zip"
       ]
     },
-    "libusb"
+    {
+      "name": "libusb",
+      "platform": "!ios"
+    }
   ],
   "overrides": [
     {

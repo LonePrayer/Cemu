@@ -11,6 +11,11 @@
 /*****************************************************************************/
 #include "aes128.h"
 #include "Common/cpu_features.h"
+#include <cstring>
+#if defined(CEMU_IOS)
+#include <openssl/evp.h>
+#include <vector>
+#endif
 
 /*****************************************************************************/
 /* Defines:                                                                  */
@@ -563,6 +568,46 @@ void __soft__AES128_CBC_decrypt(uint8* output, uint8* input, uint32 length, cons
 	cemu_assert_debug(remainders == 0);
 }
 
+#if defined(CEMU_IOS)
+static void __openssl__AES128_CBC_decrypt(uint8* output, uint8* input, uint32 length, const uint8* key, const uint8* iv)
+{
+	if (length == 0)
+		return;
+	cemu_assert_debug((length & 0xF) == 0);
+
+	uint8 zeroIv[KEYLEN]{};
+	const uint8* useIv = iv ? iv : zeroIv;
+	std::vector<uint8> tmp(length);
+	EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+	if (!ctx)
+		return;
+	if (EVP_DecryptInit_ex(ctx, EVP_aes_128_cbc(), nullptr, key, useIv) != 1)
+	{
+		EVP_CIPHER_CTX_free(ctx);
+		return;
+	}
+	EVP_CIPHER_CTX_set_padding(ctx, 0);
+	int outLen = 0;
+	int total = 0;
+	if (EVP_DecryptUpdate(ctx, tmp.data(), &outLen, input, (int)length) != 1)
+	{
+		EVP_CIPHER_CTX_free(ctx);
+		return;
+	}
+	total = outLen;
+	if (EVP_DecryptFinal_ex(ctx, tmp.data() + total, &outLen) != 1)
+	{
+		EVP_CIPHER_CTX_free(ctx);
+		return;
+	}
+	total += outLen;
+	EVP_CIPHER_CTX_free(ctx);
+	if (total < 0)
+		return;
+	std::memcpy(output, tmp.data(), length);
+}
+#endif
+
 void AES128_CBC_decrypt_buffer_depr(uint8* output, uint8* input, uint32 length, const uint8* key, const uint8* iv)
 {
 	aes128Ctx_t aesCtx;
@@ -851,7 +896,11 @@ void AES128_init()
 		AES128_ECB_encrypt = __soft__AES128_ECB_encrypt;
 	}
     #else
+	#if defined(CEMU_IOS)
+	AES128_CBC_decrypt = __openssl__AES128_CBC_decrypt;
+	#else
 	AES128_CBC_decrypt = __soft__AES128_CBC_decrypt;
+	#endif
 	AES128_ECB_encrypt = __soft__AES128_ECB_encrypt;
     #endif
 }

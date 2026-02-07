@@ -1,6 +1,10 @@
 #include "Cafe/GameProfile/GameProfile.h"
 #include "Cafe/IOSU/legacy/iosu_crypto.h"
+#if HAS_VULKAN
 #include "Cafe/HW/Latte/Renderer/Vulkan/VulkanAPI.h"
+#else
+static constexpr bool g_vulkan_available = false;
+#endif
 #include "Cafe/CafeSystem.h"
 #include "Cemu/Logging/CemuLogging.h"
 #include "config/ActiveSettings.h"

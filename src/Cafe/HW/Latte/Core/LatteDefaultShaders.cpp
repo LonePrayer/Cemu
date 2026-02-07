@@ -1,3 +1,16 @@
+#if !HAS_OPENGL
+#include "Cafe/HW/Latte/Core/LatteDefaultShaders.h"
+
+LatteDefaultShader_t* LatteDefaultShader_getPixelCopyShader_depthToColor()
+{
+	return nullptr;
+}
+
+LatteDefaultShader_t* LatteDefaultShader_getPixelCopyShader_colorToDepth()
+{
+	return nullptr;
+}
+#else
 #include "Cafe/HW/Latte/Core/Latte.h"
 #include "Cafe/HW/Latte/Core/LatteDraw.h"
 #include "Cafe/HW/Latte/Core/LatteShader.h"
@@ -85,3 +98,4 @@ LatteDefaultShader_t* LatteDefaultShader_getPixelCopyShader_colorToDepth()
 	catchOpenGLError();
 	return defaultShader;
 }
+#endif

@@ -514,6 +514,9 @@ void LatteOverlay_translateScreenPosition(ScreenPosition pos, const Vector2f& wi
 
 void LatteOverlay_render(bool pad_view)
 {
+#if defined(CEMU_IOS)
+	return; // Skip ImGui overlay on iOS — we use native UIKit FPS label
+#endif
 	const auto& config = GetConfig();
 	if(config.overlay.position == ScreenPosition::kDisabled && config.notification.position == ScreenPosition::kDisabled)
 		return;

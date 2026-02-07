@@ -1515,11 +1515,18 @@ namespace iosu
 		{
 			void TitleStart() override
 			{
+#if defined(CEMU_IOS)
+				cemuLog_log(LogType::Force, "FPD service disabled on iOS");
+				return;
+#endif
 				gFPDService.Start();
 				gFPDService.SetTimerUpdate(1000); // call TimerUpdate() once a second
 			}
 			void TitleStop() override
 			{
+#if defined(CEMU_IOS)
+				return;
+#endif
 				gFPDService.StopFriendSession();
 				gFPDService.Stop();
 			}
@@ -1532,4 +1539,3 @@ namespace iosu
 
 	}
 }
-

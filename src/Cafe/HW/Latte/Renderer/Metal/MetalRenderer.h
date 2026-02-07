@@ -274,8 +274,10 @@ public:
 
 	void SetShouldMaximizeConcurrentCompilation(bool shouldMaximizeConcurrentCompilation)
 	{
+#if !defined(CEMU_IOS)
 	    if (m_supportsMetal3)
 	        m_device->setShouldMaximizeConcurrentCompilation(shouldMaximizeConcurrentCompilation);
+#endif
 	}
 
 	bool IsCommandBufferActive() const
@@ -396,7 +398,11 @@ public:
 
     MTL::ResourceOptions GetOptimalBufferStorageMode() const
     {
+#if defined(CEMU_IOS)
+        return MTL::ResourceStorageModeShared;
+#else
         return (m_hasUnifiedMemory ? MTL::ResourceStorageModeShared : MTL::ResourceStorageModeManaged);
+#endif
     }
 
     MTL::Texture* GetNullTexture2D() const
@@ -503,7 +509,7 @@ private:
 	std::map<MTL::PixelFormat, MTL::RenderPipelineState*> m_copyDepthToColorPipelines;
 
 	// Void vertex pipelines
-	class MetalVoidVertexPipeline* m_copyBufferToBufferPipeline;
+	class MetalVoidVertexPipeline* m_copyBufferToBufferPipeline = nullptr;
 
 	// Synchronization resources
 	MTL::Event* m_event;

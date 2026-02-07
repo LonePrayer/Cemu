@@ -185,7 +185,10 @@ MTL::Texture* LatteTextureViewMtl::CreateSwizzledView(uint32 gpuSamplerSwizzle)
     levelCount = std::max(levelCount, (uint32)1);
 
     auto pixelFormat = GetMtlPixelFormat(format, m_baseTexture->isDepth);
-    MTL::Texture* texture = m_baseTexture->GetTexture()->newTextureView(pixelFormat, textureType, NS::Range::Make(baseLevel, levelCount), NS::Range::Make(baseLayer, layerCount), swizzle);
+    auto baseTex = m_baseTexture->GetTexture();
+    if (!baseTex)
+        return nullptr;
+    MTL::Texture* texture = baseTex->newTextureView(pixelFormat, textureType, NS::Range::Make(baseLevel, levelCount), NS::Range::Make(baseLayer, layerCount), swizzle);
 
     return texture;
 }

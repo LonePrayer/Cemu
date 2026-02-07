@@ -15,10 +15,6 @@ add_library(CemuInput
 	api/DSU/DSUControllerProvider.h
 	api/DSU/DSUMessages.h
 	api/DSU/DSUMessages.cpp
-	api/SDL/SDLController.cpp
-	api/SDL/SDLControllerProvider.cpp
-	api/SDL/SDLController.h
-	api/SDL/SDLControllerProvider.h
 	api/Keyboard/KeyboardControllerProvider.h
 	api/Keyboard/KeyboardControllerProvider.cpp
 	api/Keyboard/KeyboardController.cpp
@@ -42,6 +38,15 @@ add_library(CemuInput
 )
 
 set_property(TARGET CemuInput PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
+if (ENABLE_SDL)
+	target_sources(CemuInput PRIVATE
+		api/SDL/SDLController.cpp
+		api/SDL/SDLControllerProvider.cpp
+		api/SDL/SDLController.h
+		api/SDL/SDLControllerProvider.h
+	)
+endif()
 
 if(WIN32)
 	# XInput
@@ -99,3 +104,13 @@ endif()
 if (ENABLE_BLUEZ)
 	target_link_libraries(CemuInput PRIVATE bluez::bluez)
 endif ()
+
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+	target_sources(CemuInput PRIVATE
+		api/iOSController.h
+		api/iOSController.mm
+	)
+	target_link_libraries(CemuInput PRIVATE
+		"-framework GameController"
+	)
+endif()

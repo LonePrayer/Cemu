@@ -13,12 +13,19 @@
 #include "Cafe/HW/Latte/Renderer/Metal/MetalQuery.h"
 #include "Cafe/HW/Latte/Renderer/Metal/LatteToMtl.h"
 #include "Cafe/HW/Latte/Renderer/Metal/UtilityShaderSource.h"
+#include <TargetConditionals.h>
+#if defined(CEMU_IOS)
+#include <dispatch/dispatch.h>
+#include <mach/mach.h>
+#endif
 
 #include "Cafe/HW/Latte/Core/LatteShader.h"
 #include "Cafe/HW/Latte/Core/LatteIndices.h"
 #include "Cafe/HW/Latte/Core/LatteBufferCache.h"
 #include "CafeSystem.h"
 #include "Cemu/Logging/CemuLogging.h"
+
+extern std::atomic_int g_compiled_shaders_total;
 #include "Cafe/HW/Latte/Core/FetchShader.h"
 #include "Cafe/HW/Latte/Core/LatteConst.h"
 #include "config/CemuConfig.h"
@@ -38,14 +45,23 @@ void LatteDraw_handleSpecialState8_clearAsDepth();
 
 std::vector<MetalRenderer::DeviceInfo> MetalRenderer::GetDevices()
 {
-    NS_STACK_SCOPED auto devices = MTL::CopyAllDevices();
     std::vector<MetalRenderer::DeviceInfo> result;
+#if !defined(CEMU_IOS)
+    NS_STACK_SCOPED auto devices = MTL::CopyAllDevices();
     result.reserve(devices->count());
     for (uint32 i = 0; i < devices->count(); i++)
     {
         MTL::Device* device = static_cast<MTL::Device*>(devices->object(i));
         result.push_back({std::string(device->name()->utf8String()), device->registryID()});
     }
+#else
+    auto device = MTL::CreateSystemDefaultDevice();
+    if (device)
+    {
+        result.push_back({std::string(device->name()->utf8String()), 0});
+        device->release();
+    }
+#endif
 
     return result;
 }
@@ -123,6 +139,7 @@ MetalRenderer::MetalRenderer()
 
     // Pick a device
     auto& config = GetConfig();
+#if !defined(CEMU_IOS)
     const bool hasDeviceSet = config.mtl_graphic_device_uuid != 0;
 
     // If a device is set, try to find it
@@ -150,6 +167,10 @@ MetalRenderer::MetalRenderer()
         // Use the system default device
         m_device = MTL::CreateSystemDefaultDevice();
     }
+#else
+    // iOS only has one GPU
+    m_device = MTL::CreateSystemDefaultDevice();
+#endif
 
     // Vendor
     const char* deviceName = m_device->name()->utf8String();
@@ -170,7 +191,11 @@ MetalRenderer::MetalRenderer()
     m_hasUnifiedMemory = m_device->hasUnifiedMemory();
     m_supportsMetal3 = m_device->supportsFamily(MTL::GPUFamilyMetal3);
     m_supportsMeshShaders = (m_supportsMetal3 && (m_vendor != GfxVendor::Intel || GetConfig().force_mesh_shaders.GetValue())); // Intel GPUs have issues with mesh shaders
+#if defined(CEMU_IOS)
+    m_recommendedMaxVRAMUsage = 1024ULL * 1024ULL * 1024ULL; // 1GB default on iOS (unified memory)
+#else
     m_recommendedMaxVRAMUsage = m_device->recommendedMaxWorkingSetSize();
+#endif
     m_pixelFormatSupport = MetalPixelFormatSupport(m_device);
 
     CheckForPixelFormatSupport(m_pixelFormatSupport);
@@ -225,6 +250,12 @@ MetalRenderer::MetalRenderer()
     else
         m_defaultCommitTreshlod = 196;
 
+#ifdef CEMU_IOS
+    // On iOS, commit more frequently to keep command buffers small
+    // This prevents IOGPU resource exhaustion within a single command buffer
+    m_defaultCommitTreshlod = std::min(m_defaultCommitTreshlod, (uint32)32);
+#endif
+
     // Occlusion queries
     m_occlusionQuery.m_resultBuffer = m_device->newBuffer(OCCLUSION_QUERY_POOL_SIZE * sizeof(uint64), MTL::ResourceStorageModeShared);
 #ifdef CEMU_DEBUG_ASSERT
@@ -260,9 +291,21 @@ MetalRenderer::MetalRenderer()
     m_copyDepthToColorDesc->setVertexFunction(vertexFullscreenFunction);
     m_copyDepthToColorDesc->setFragmentFunction(fragmentCopyDepthToColorFunction);
 
-    // Void vertex pipelines
+    // Void vertex pipelines (disabled on simulator to avoid pipeline creation crash)
+#if TARGET_OS_SIMULATOR
+    m_copyBufferToBufferPipeline = nullptr;
+#else
     if (m_isAppleGPU)
-        m_copyBufferToBufferPipeline = new MetalVoidVertexPipeline(this, utilityLibrary, "vertexCopyBufferToBuffer");
+    {
+        auto pipeline = new MetalVoidVertexPipeline(this, utilityLibrary, "vertexCopyBufferToBuffer");
+        if (!pipeline->GetRenderPipelineState())
+        {
+            delete pipeline;
+            pipeline = nullptr;
+        }
+        m_copyBufferToBufferPipeline = pipeline;
+    }
+#endif
 
     // HACK: for some reason, this variable ends up being initialized to some garbage data, even though its declared as bool m_captureFrame = false;
     m_occlusionQuery.m_lastCommandBuffer = nullptr;
@@ -377,6 +420,30 @@ void MetalRenderer::SwapBuffers(bool swapTV, bool swapDRC)
     // Reset the command buffers (they are released by TemporaryBufferAllocator)
     CommitCommandBuffer();
 
+#ifdef CEMU_IOS
+    // FPS and memory logging for iOS
+    {
+        static uint32 s_frameCount = 0;
+        static auto s_lastLogTime = std::chrono::steady_clock::now();
+        s_frameCount++;
+        auto now = std::chrono::steady_clock::now();
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - s_lastLogTime).count();
+        if (elapsed >= 5000) // log every 5 seconds
+        {
+            float fps = (float)s_frameCount * 1000.0f / (float)elapsed;
+            // Get memory usage
+            struct task_vm_info vmInfo;
+            mach_msg_type_number_t vmCount = TASK_VM_INFO_COUNT;
+            double memMB = 0;
+            if (task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&vmInfo, &vmCount) == KERN_SUCCESS)
+                memMB = vmInfo.phys_footprint / (1024.0 * 1024.0);
+            cemuLog_log(LogType::Force, "iOS FPS: {:.1f} mem: {:.0f}MB (frames={} elapsed={}ms cmdbufs={})", fps, memMB, s_frameCount, elapsed, m_executingCommandBuffers.size());
+            s_frameCount = 0;
+            s_lastLogTime = now;
+        }
+    }
+#endif
+
     // Debug
     m_performanceMonitor.ResetPerFrameData();
 
@@ -427,13 +494,16 @@ void MetalRenderer::HandleScreenshotRequest(LatteTextureView* texView, bool padV
 	auto& bufferAllocator = m_memoryManager->GetStagingAllocator();
 	auto buffer = bufferAllocator.AllocateBufferMemory(size, 1);
 
-	blitCommandEncoder->copyFromTexture(texMtl->GetTexture(), 0, 0, MTL::Origin(0, 0, 0), MTL::Size(width, height, 1), buffer.mtlBuffer, buffer.bufferOffset, bytesPerRow, 0);
+	auto srcTex = texMtl->GetTexture();
+	if (!srcTex) return;
+
+	blitCommandEncoder->copyFromTexture(srcTex, 0, 0, MTL::Origin(0, 0, 0), MTL::Size(width, height, 1), buffer.mtlBuffer, buffer.bufferOffset, bytesPerRow, 0);
 
 	bool formatValid = true;
 	std::vector<uint8> rgb_data;
 	rgb_data.reserve(3 * width * height);
 
-	auto pixelFormat = texMtl->GetTexture()->pixelFormat();
+	auto pixelFormat = srcTex->pixelFormat();
 	// TODO: implement more formats
 	switch (pixelFormat)
 	{
@@ -467,6 +537,9 @@ void MetalRenderer::DrawBackbufferQuad(LatteTextureView* texView, RendererOutput
 								sint32 imageX, sint32 imageY, sint32 imageWidth, sint32 imageHeight,
 								bool padView, bool clearBackground)
 {
+    static uint32 s_drawBBCount = 0;
+    s_drawBBCount++;
+
     if (!AcquireDrawable(!padView))
         return;
 
@@ -475,9 +548,11 @@ void MetalRenderer::DrawBackbufferQuad(LatteTextureView* texView, RendererOutput
     // Create render pass
     auto& layer = GetLayer(!padView);
 
+    auto drawableTex = layer.GetDrawable()->texture();
+
     NS_STACK_SCOPED MTL::RenderPassDescriptor* renderPassDescriptor = MTL::RenderPassDescriptor::alloc()->init();
     auto colorAttachment = renderPassDescriptor->colorAttachments()->object(0);
-    colorAttachment->setTexture(layer.GetDrawable()->texture());
+    colorAttachment->setTexture(drawableTex);
     colorAttachment->setLoadAction(clearBackground ? MTL::LoadActionClear : MTL::LoadActionLoad);
     colorAttachment->setStoreAction(MTL::StoreActionStore);
 
@@ -498,6 +573,13 @@ void MetalRenderer::DrawBackbufferQuad(LatteTextureView* texView, RendererOutput
 
     // Get the render pipeline state
     auto renderPipelineState = m_outputShaderCache->GetPipeline(shader, shaderIndex, m_state.m_usesSRGB);
+
+    if (!renderPipelineState)
+    {
+        cemuLog_log(LogType::Force, "DrawBackbufferQuad #{}: NULL pipeline state!", s_drawBBCount);
+        EndEncoding();
+        return;
+    }
 
     // Draw to Metal layer
     renderCommandEncoder->setRenderPipelineState(renderPipelineState);
@@ -613,7 +695,13 @@ ImTextureID MetalRenderer::GenerateTexture(const std::vector<uint8>& data, const
 		desc->setPixelFormat(MTL::PixelFormatRGBA8Unorm);
 		desc->setWidth(size.x);
 		desc->setHeight(size.y);
-		desc->setStorageMode(m_isAppleGPU ? MTL::StorageModeShared : MTL::StorageModeManaged);
+		desc->setStorageMode(
+#if defined(CEMU_IOS)
+			MTL::StorageModeShared
+#else
+			m_isAppleGPU ? MTL::StorageModeShared : MTL::StorageModeManaged
+#endif
+		);
 		desc->setUsage(MTL::TextureUsageShaderRead);
 
 		MTL::Texture* texture = m_device->newTexture(desc);
@@ -776,7 +864,9 @@ void MetalRenderer::texture_loadSlice(LatteTexture* hostTexture, sint32 width, s
 
     // TODO: specify blit options when copying to a depth stencil texture?
     // Copy the data from the temporary buffer to the texture
-    blitCommandEncoder->copyFromBuffer(allocation.mtlBuffer, allocation.bufferOffset, bytesPerRow, 0, MTL::Size(width, height, 1), textureMtl->GetTexture(), sliceIndex, mipIndex, MTL::Origin(0, 0, offsetZ));
+    auto dstTex = textureMtl->GetTexture();
+    if (!dstTex) return;
+    blitCommandEncoder->copyFromBuffer(allocation.mtlBuffer, allocation.bufferOffset, bytesPerRow, 0, MTL::Size(width, height, 1), dstTex, sliceIndex, mipIndex, MTL::Origin(0, 0, offsetZ));
     //}
 }
 
@@ -789,6 +879,7 @@ void MetalRenderer::texture_clearColorSlice(LatteTexture* hostTexture, sint32 sl
     }
 
     auto mtlTexture = static_cast<LatteTextureMtl*>(hostTexture)->GetTexture();
+    if (!mtlTexture) return;
 
     ClearColorTextureInternal(mtlTexture, sliceIndex, mipIndex, r, g, b, a);
 }
@@ -803,6 +894,7 @@ void MetalRenderer::texture_clearDepthSlice(LatteTexture* hostTexture, uint32 sl
     }
 
     auto mtlTexture = static_cast<LatteTextureMtl*>(hostTexture)->GetTexture();
+    if (!mtlTexture) return;
 
     NS_STACK_SCOPED MTL::RenderPassDescriptor* renderPassDescriptor = MTL::RenderPassDescriptor::alloc()->init();
     if (clearDepth)
@@ -861,6 +953,12 @@ void MetalRenderer::texture_copyImageSubData(LatteTexture* src, sint32 srcMip, s
 
     auto mtlSrc = static_cast<LatteTextureMtl*>(src)->GetTexture();
     auto mtlDst = static_cast<LatteTextureMtl*>(dst)->GetTexture();
+
+    if (!mtlSrc || !mtlDst)
+    {
+        cemuLog_log(LogType::Force, "texture_copyImageSubData: nil texture (src={} dst={})", (void*)mtlSrc, (void*)mtlDst);
+        return;
+    }
 
     uint32 srcBaseLayer = 0;
     uint32 dstBaseLayer = 0;
@@ -933,7 +1031,9 @@ void MetalRenderer::texture_copyImageSubData(LatteTexture* src, sint32 srcMip, s
 
 LatteTextureReadbackInfo* MetalRenderer::texture_createReadback(LatteTextureView* textureView)
 {
-    size_t uploadSize = static_cast<LatteTextureMtl*>(textureView->baseTexture)->GetTexture()->allocatedSize();
+    auto baseTex = static_cast<LatteTextureMtl*>(textureView->baseTexture)->GetTexture();
+    size_t uploadSize = baseTex ? baseTex->allocatedSize() : 0;
+    if (uploadSize == 0) return nullptr;
 
     if ((m_readbackBufferWriteOffset + uploadSize) > TEXTURE_READBACK_SIZE)
 	{
@@ -1446,7 +1546,12 @@ void MetalRenderer::draw_endSequence()
 	m_recordedDrawcalls++;
 	// The number of draw calls needs to twice as big, since we are interrupting the render pass
 	// TODO: ucomment?
+#ifdef CEMU_IOS
+	// On iOS, commit more aggressively to prevent IOGPU resource exhaustion
+	if (m_recordedDrawcalls >= m_commitTreshold/* || hasReadback*/)
+#else
 	if (m_recordedDrawcalls >= m_commitTreshold * 2/* || hasReadback*/)
+#endif
 	{
 		CommitCommandBuffer();
 
@@ -1879,6 +1984,17 @@ void MetalRenderer::CommitCommandBuffer()
 
     ProcessFinishedCommandBuffers();
 
+#ifdef CEMU_IOS
+    // On iOS, limit in-flight command buffers to prevent IOGPU resource exhaustion
+    constexpr size_t kMaxInFlightCommandBuffers = 8;
+    if (m_executingCommandBuffers.size() >= kMaxInFlightCommandBuffers)
+    {
+        auto oldest = m_executingCommandBuffers.front();
+        oldest->waitUntilCompleted();
+        ProcessFinishedCommandBuffers();
+    }
+#endif
+
     // Commit the command buffer
     if (!m_currentCommandBuffer.m_commited)
     {
@@ -1923,6 +2039,12 @@ void MetalRenderer::ProcessFinishedCommandBuffers()
 
 bool MetalRenderer::AcquireDrawable(bool mainWindow)
 {
+#if defined(CEMU_IOS)
+    // On iOS, nextDrawable() blocks when the main thread's run loop can't service
+    // CA transactions (e.g., main thread waiting for GPU init). Skip until ready.
+    if (!g_isGPUInitFinished.load())
+        return false;
+#endif
     auto& layer = GetLayer(mainWindow);
     if (!layer.GetLayer())
         return false;
@@ -1930,7 +2052,15 @@ bool MetalRenderer::AcquireDrawable(bool mainWindow)
     const bool latteBufferUsesSRGB = mainWindow ? LatteGPUState.tvBufferUsesSRGB : LatteGPUState.drcBufferUsesSRGB;
     if (latteBufferUsesSRGB != m_state.m_usesSRGB)
     {
+#if defined(CEMU_IOS)
+        auto pixelFormat = latteBufferUsesSRGB ? MTL::PixelFormatBGRA8Unorm_sRGB : MTL::PixelFormatBGRA8Unorm;
+        auto layerPtr = layer.GetLayer();
+        dispatch_async(dispatch_get_main_queue(), ^{
+            layerPtr->setPixelFormat(pixelFormat);
+        });
+#else
         layer.GetLayer()->setPixelFormat(latteBufferUsesSRGB ? MTL::PixelFormatBGRA8Unorm_sRGB : MTL::PixelFormatBGRA8Unorm);
+#endif
         m_state.m_usesSRGB = latteBufferUsesSRGB;
     }
 
@@ -2258,6 +2388,10 @@ void MetalRenderer::CopyBufferToBuffer(MTL::Buffer* src, uint32 srcOffset, MTL::
 
 void MetalRenderer::SwapBuffer(bool mainWindow)
 {
+    static uint32 s_swapCount = 0;
+    s_swapCount++;
+    bool hadDrawable = GetLayer(mainWindow).GetDrawable() != nullptr;
+
     if (!AcquireDrawable(mainWindow))
         return;
 

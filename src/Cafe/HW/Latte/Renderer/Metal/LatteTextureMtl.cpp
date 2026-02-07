@@ -77,17 +77,27 @@ LatteTextureMtl::LatteTextureMtl(class MetalRenderer* mtlRenderer, Latte::E_DIM 
 	auto pixelFormat = GetMtlPixelFormat(format, isDepth);
 	desc->setPixelFormat(pixelFormat);
 
-	MTL::TextureUsage usage = MTL::TextureUsageShaderRead | MTL::TextureUsagePixelFormatView;
+	MTL::TextureUsage usage = MTL::TextureUsageShaderRead;
+	if (!Latte::IsCompressedFormat(format))
+		usage |= MTL::TextureUsagePixelFormatView;
 	if (FormatIsRenderable(format))
 		usage |= MTL::TextureUsageRenderTarget;
 	desc->setUsage(usage);
 
 	m_texture = mtlRenderer->GetDevice()->newTexture(desc);
+#ifdef CEMU_IOS
+	if (!m_texture)
+	{
+		cemuLog_log(LogType::Force, "LatteTextureMtl: newTexture returned nil ({}x{}x{} fmt={} mips={} type={})",
+			effectiveBaseWidth, effectiveBaseHeight, effectiveBaseDepth, (uint32)format, mipLevels, (uint32)textureType);
+	}
+#endif
 }
 
 LatteTextureMtl::~LatteTextureMtl()
 {
-	m_texture->release();
+	if (m_texture)
+		m_texture->release();
 }
 
 LatteTextureView* LatteTextureMtl::CreateView(Latte::E_DIM dim, Latte::E_GX2SURFFMT format, sint32 firstMip, sint32 mipCount, sint32 firstSlice, sint32 sliceCount)

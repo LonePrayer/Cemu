@@ -1,3 +1,10 @@
+#pragma once
+
+#if HAS_OPENGL
+#include "Common/GLInclude/GLInclude.h"
+#else
+using GLuint = unsigned int;
+#endif
 
 typedef struct
 {

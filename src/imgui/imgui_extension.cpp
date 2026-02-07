@@ -2,9 +2,7 @@
 #include "WindowSystem.h"
 #include "Cafe/HW/Latte/Renderer/Renderer.h"
 #include "resource/IconsFontAwesome5.h"
-#include "imgui_impl_opengl3.h"
 #include "resource/resource.h"
-#include "imgui_impl_vulkan.h"
 #include "input/InputManager.h"
 
 // <imgui_internal.h>

@@ -6,6 +6,7 @@
 
 +(Class) layerClass { return [CAMetalLayer class]; }
 
+#if !defined(CEMU_IOS)
 // copied from https://github.com/KhronosGroup/MoltenVK/blob/master/Demos/Cube/macOS/DemoViewController.m
 
 -(CALayer*) makeBackingLayer
@@ -23,4 +24,5 @@
 	layer.contentsScale = newScale;
 	return YES;
 }
+#endif
 @end

@@ -2,6 +2,9 @@
 #include <execinfo.h>
 #include <string.h>
 #include <string>
+#if defined(__APPLE__)
+    #include <TargetConditionals.h>
+#endif
 #include "config/CemuConfig.h"
 #include "util/helpers/StringHelpers.h"
 #include "ExceptionHandler.h"
@@ -168,5 +171,7 @@ void ExceptionHandler_Init()
 	sigaction(SIGQUIT, &action, nullptr);
 	sigaction(SIGSEGV, &action, nullptr);
 	sigaction(SIGSYS, &action, nullptr);
+#if !(defined(__APPLE__) && TARGET_OS_IOS)
 	sigaction(SIGTRAP, &action, nullptr);
+#endif
 }

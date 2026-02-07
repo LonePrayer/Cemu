@@ -3,6 +3,11 @@
 
 include(FindPackageHandleStandardArgs)
 
+if (TARGET zstd::zstd)
+	set(zstd_FOUND TRUE)
+	return()
+endif()
+
 find_package(zstd CONFIG)
 if (zstd_FOUND)
 	# Use upstream zstdConfig.cmake if possible

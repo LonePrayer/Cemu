@@ -182,7 +182,7 @@ inline sint16 _swapEndianS16(sint16 v)
 #else
 inline uint64 _swapEndianU64(uint64 v)
 {
-#if BOOST_OS_MACOS
+#if BOOST_OS_MACOS || BOOST_OS_IOS
     return OSSwapInt64(v);
 #elif BOOST_OS_BSD
 #ifdef __OpenBSD__
@@ -197,7 +197,7 @@ inline uint64 _swapEndianU64(uint64 v)
 
 inline uint32 _swapEndianU32(uint32 v)
 {
-#if BOOST_OS_MACOS
+#if BOOST_OS_MACOS || BOOST_OS_IOS
     return OSSwapInt32(v);
 #elif BOOST_OS_BSD
 #ifdef __OpenBSD__
@@ -212,7 +212,7 @@ inline uint32 _swapEndianU32(uint32 v)
 
 inline sint32 _swapEndianS32(sint32 v)
 {
-#if BOOST_OS_MACOS
+#if BOOST_OS_MACOS || BOOST_OS_IOS
     return (sint32)OSSwapInt32((uint32)v);
 #elif BOOST_OS_BSD
 #ifdef __OpenBSD__
@@ -308,8 +308,15 @@ inline uint64 _udiv128(uint64 highDividend, uint64 lowDividend, uint64 divisor, 
     #error Unknown compiler
 #endif
 
+#if defined(__APPLE__)
+    #include <TargetConditionals.h>
+#endif
 #if defined(_MSC_VER)
     #define DEBUG_BREAK __debugbreak()
+#elif defined(__APPLE__) && TARGET_OS_IOS
+    #include <csignal>
+    #include <cstdio>
+    #define DEBUG_BREAK do { fprintf(stderr, "[CEMU_ASSERT] DEBUG_BREAK at %s:%d\n", __FILE__, __LINE__); } while(0)
 #else
     #include <csignal>
     #define DEBUG_BREAK raise(SIGTRAP) 

@@ -28,12 +28,26 @@ if(ENABLE_CUBEB)
 	#add_compile_definitions(HAS_CUBEB)
 endif()
 
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+	target_sources(CemuAudio PRIVATE
+		CoreAudioAPI.h
+		CoreAudioAPI.mm
+	)
+endif()
+
 target_include_directories(CemuAudio PUBLIC "../")
 
 target_link_libraries(CemuAudio PRIVATE
 	CemuCommon
 	CemuGui
 )
+
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+	target_link_libraries(CemuAudio PRIVATE
+		"-framework AudioToolbox"
+		"-framework AVFoundation"
+	)
+endif()
 
 if(ENABLE_CUBEB)
 	# PUBLIC because cubeb.h/cubeb.h is included in CubebAPI.h

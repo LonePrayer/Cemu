@@ -7,6 +7,9 @@
 #include "Cafe/OS/libs/coreinit/coreinit_Alarm.h"
 #include "input/InputManager.h"
 #include "WindowSystem.h"
+#if defined(CEMU_IOS)
+#include "input/api/iOSController.h"
+#endif
 
 #ifdef PUBLIC_RELASE
 #define vpadbreak() 
@@ -167,6 +170,7 @@ namespace vpad
 		struct
 		{
 			uint64 drcLastCallTime = 0;
+			uint32 last_hold = 0; // for iOS GCController trig/release tracking
 
 			struct AccParam
 			{
@@ -250,6 +254,20 @@ namespace vpad
 					status->vpadErr = -1;
 				return 0;
 			}
+#if defined(CEMU_IOS)
+			// On iOS, inject GCController state directly when no emulated controller is configured
+			if (g_iosControllerState.connected.load(std::memory_order_relaxed))
+			{
+				status->hold = g_iosControllerState.hold.load(std::memory_order_relaxed);
+				status->leftStick.x = g_iosControllerState.leftStickX.load(std::memory_order_relaxed);
+				status->leftStick.y = g_iosControllerState.leftStickY.load(std::memory_order_relaxed);
+				status->rightStick.x = g_iosControllerState.rightStickX.load(std::memory_order_relaxed);
+				status->rightStick.y = g_iosControllerState.rightStickY.load(std::memory_order_relaxed);
+				status->trig = ~vpad::g_vpad.controller_data[0].last_hold & status->hold;
+				status->release = vpad::g_vpad.controller_data[0].last_hold & ~status->hold;
+				vpad::g_vpad.controller_data[0].last_hold = status->hold;
+			}
+#endif
 			if (error)
 				*error = VPAD_READ_ERR_NONE;
 			return 1;

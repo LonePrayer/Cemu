@@ -670,7 +670,7 @@ void export_curl_multi_fdset(PPCInterpreter_t* hCPU)
 		}
 	};
 
-#if BOOST_OS_UNIX
+#if BOOST_OS_UNIX || BOOST_OS_IOS
 	for (int s = 0; s < h_maxFd + 1; s++) 
 	{
 		if(FD_ISSET(s, &h_readFd))

@@ -115,19 +115,30 @@ void LatteThread_HandleOSScreen()
 int Latte_ThreadEntry()
 {
 	SetThreadName("LatteThread");
+	cemuLog_log(LogType::Force, "LatteThread: start");
 	sint32 w,h;
 	WindowSystem::GetWindowPhysSize(w,h);
 
 	// renderer
+	cemuLog_log(LogType::Force, "LatteThread: renderer init");
 	g_renderer->Initialize();
+	cemuLog_log(LogType::Force, "LatteThread: renderer init done");
 	RendererOutputShader::InitializeStatic();
+	cemuLog_log(LogType::Force, "LatteThread: output shaders ready");
 
+	cemuLog_log(LogType::Force, "LatteThread: timing init");
 	LatteTiming_Init();
+	cemuLog_log(LogType::Force, "LatteThread: texture init");
 	LatteTexture_init();
+	cemuLog_log(LogType::Force, "LatteThread: TC init");
 	LatteTC_Init();
+	cemuLog_log(LogType::Force, "LatteThread: buffer cache init");
 	LatteBufferCache_init(164 * 1024 * 1024);
+	cemuLog_log(LogType::Force, "LatteThread: query init");
 	LatteQuery_Init();
+	cemuLog_log(LogType::Force, "LatteThread: SHRC init");
 	LatteSHRC_Init();
+	cemuLog_log(LogType::Force, "LatteThread: streamout init");
 	LatteStreamout_InitCache();
 
 	g_renderer->renderTarget_setViewport(0, 0, w, h, 0.0f, 1.0f);
@@ -154,26 +165,35 @@ int Latte_ThreadEntry()
 	}
 
 	sLatteThreadFinishedInit = true;
+	cemuLog_log(LogType::Force, "LatteThread: init complete");
 
 	// register debug handler
 	if (cemuLog_isLoggingEnabled(LogType::OpenGLLogging))
 		g_renderer->EnableDebugMode();
 
 	// wait till a game is started
+	cemuLog_log(LogType::Force, "LatteThread: waiting for title");
 	while( true )
 	{
 		if( CafeSystem::IsTitleRunning() )
 			break;
 
+#if !defined(CEMU_IOS)
 		g_renderer->DrawEmptyFrame(true);
 		g_renderer->DrawEmptyFrame(false);
 		g_renderer->CancelScreenshotRequest(); // keep the screenshot request queue empty
+#endif
 		std::this_thread::sleep_for(std::chrono::milliseconds(1000/60));
 	}
+	cemuLog_log(LogType::Force, "LatteThread: title running");
 
+#if !defined(CEMU_IOS)
+	cemuLog_log(LogType::Force, "LatteThread: draw empty frame");
 	g_renderer->DrawEmptyFrame(true);
+#endif
 
 	// before doing anything with game specific shaders, we need to wait for graphic packs to finish loading
+	cemuLog_log(LogType::Force, "LatteThread: wait for graphic packs");
 	GraphicPack2::WaitUntilReady();
 	// if legacy packs are enabled we cannot use the colorbuffer resolution optimization
 	LatteGPUState.allowFramebufferSizeOptimization = true;
@@ -193,10 +213,13 @@ int Latte_ThreadEntry()
 		}
 	}
 	// load disk shader cache
+	cemuLog_log(LogType::Force, "LatteThread: load shader cache");
     LatteShaderCache_Load();
 	// init registers
+	cemuLog_log(LogType::Force, "LatteThread: load initial registers");
 	Latte_LoadInitialRegisters();
 	// let CPU thread know the GPU is done initializing
+	cemuLog_log(LogType::Force, "LatteThread: GPU init finished, waiting for GX2Init");
 	g_isGPUInitFinished = true;
 	// wait until CPU has called GX2Init()
 	while (LatteGPUState.gx2InitCalled == 0)
@@ -207,6 +230,7 @@ int Latte_ThreadEntry()
 		if (Latte_GetStopSignal())
 			LatteThread_Exit();
 	}
+	cemuLog_log(LogType::Force, "LatteThread: GX2Init called, entering ring buffer processing");
 	LatteCP_ProcessRingbuffer();
 	cemu_assert_debug(false); // should never reach
 	return 0;

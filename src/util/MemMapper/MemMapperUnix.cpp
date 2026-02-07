@@ -2,6 +2,9 @@
 
 #include <unistd.h>
 #include <sys/mman.h>
+#if defined(__APPLE__)
+    #include <TargetConditionals.h>
+#endif
 
 namespace MemMapper
 {
@@ -32,7 +35,16 @@ namespace MemMapper
 
 	void* ReserveMemory(void* baseAddr, size_t size, PAGE_PERMISSION permissionFlags)
 	{
+#if defined(__APPLE__) && TARGET_OS_IOS
+		// iOS: reserve virtual address space with PROT_NONE (no physical backing).
+		// Physical pages are committed later via AllocateMemory/mprotect.
+		void* r = mmap(baseAddr, size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+		if (r == MAP_FAILED)
+			r = mmap(nullptr, size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+		return r;
+#else
 		return mmap(baseAddr, size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+#endif
 	}
 
 	void FreeReservation(void* baseAddr, size_t size)
