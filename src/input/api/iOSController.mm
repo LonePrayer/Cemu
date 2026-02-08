@@ -3,24 +3,6 @@
 #import <GameController/GameController.h>
 #include "Cemu/Logging/CemuLogging.h"
 
-// VPAD button flags (from ControllerVPADMapping2 in VPADController.cpp)
-#define VPAD_A       0x8000
-#define VPAD_B       0x4000
-#define VPAD_X       0x2000
-#define VPAD_Y       0x1000
-#define VPAD_L       0x0020
-#define VPAD_R       0x0010
-#define VPAD_ZL      0x0080
-#define VPAD_ZR      0x0040
-#define VPAD_PLUS    0x0008
-#define VPAD_MINUS   0x0004
-#define VPAD_UP      0x0200
-#define VPAD_DOWN    0x0100
-#define VPAD_LEFT    0x0800
-#define VPAD_RIGHT   0x0400
-#define VPAD_STICK_L 0x00040000
-#define VPAD_STICK_R 0x00020000
-
 IOSControllerState g_iosControllerState;
 
 void IOSController_init()
@@ -40,22 +22,22 @@ void IOSController_init()
 			{
 				controller.extendedGamepad.valueChangedHandler = ^(GCExtendedGamepad* gamepad, GCControllerElement* element) {
 					uint32_t buttons = 0;
-					if (gamepad.buttonA.pressed) buttons |= VPAD_A;
-					if (gamepad.buttonB.pressed) buttons |= VPAD_B;
-					if (gamepad.buttonX.pressed) buttons |= VPAD_X;
-					if (gamepad.buttonY.pressed) buttons |= VPAD_Y;
-					if (gamepad.leftShoulder.pressed) buttons |= VPAD_L;
-					if (gamepad.rightShoulder.pressed) buttons |= VPAD_R;
-					if (gamepad.leftTrigger.pressed) buttons |= VPAD_ZL;
-					if (gamepad.rightTrigger.pressed) buttons |= VPAD_ZR;
-					if (gamepad.buttonMenu.pressed) buttons |= VPAD_PLUS;
-					if (gamepad.buttonOptions.pressed) buttons |= VPAD_MINUS;
-					if (gamepad.dpad.up.pressed) buttons |= VPAD_UP;
-					if (gamepad.dpad.down.pressed) buttons |= VPAD_DOWN;
-					if (gamepad.dpad.left.pressed) buttons |= VPAD_LEFT;
-					if (gamepad.dpad.right.pressed) buttons |= VPAD_RIGHT;
-					if (gamepad.leftThumbstickButton.pressed) buttons |= VPAD_STICK_L;
-					if (gamepad.rightThumbstickButton.pressed) buttons |= VPAD_STICK_R;
+					if (gamepad.buttonA.pressed) buttons |= ios_vpad::A;
+					if (gamepad.buttonB.pressed) buttons |= ios_vpad::B;
+					if (gamepad.buttonX.pressed) buttons |= ios_vpad::X;
+					if (gamepad.buttonY.pressed) buttons |= ios_vpad::Y;
+					if (gamepad.leftShoulder.pressed) buttons |= ios_vpad::L;
+					if (gamepad.rightShoulder.pressed) buttons |= ios_vpad::R;
+					if (gamepad.leftTrigger.pressed) buttons |= ios_vpad::ZL;
+					if (gamepad.rightTrigger.pressed) buttons |= ios_vpad::ZR;
+					if (gamepad.buttonMenu.pressed) buttons |= ios_vpad::PLUS;
+					if (gamepad.buttonOptions.pressed) buttons |= ios_vpad::MINUS;
+					if (gamepad.dpad.up.pressed) buttons |= ios_vpad::UP;
+					if (gamepad.dpad.down.pressed) buttons |= ios_vpad::DOWN;
+					if (gamepad.dpad.left.pressed) buttons |= ios_vpad::LEFT;
+					if (gamepad.dpad.right.pressed) buttons |= ios_vpad::RIGHT;
+					if (gamepad.leftThumbstickButton.pressed) buttons |= ios_vpad::STICK_L;
+					if (gamepad.rightThumbstickButton.pressed) buttons |= ios_vpad::STICK_R;
 
 					g_iosControllerState.hold.store(buttons, std::memory_order_relaxed);
 					g_iosControllerState.leftStickX.store(gamepad.leftThumbstick.xAxis.value, std::memory_order_relaxed);

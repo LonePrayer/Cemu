@@ -1,6 +1,7 @@
 #import <UIKit/UIKit.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <objc/runtime.h>
+#import <Security/Security.h>
 
 #include <cerrno>
 #include <cstdio>
@@ -18,6 +19,7 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <mach/mach.h>
+#include <os/proc.h>
 
 // Write logs to both stderr and a file in Documents for retrieval
 static FILE* g_logFile = nullptr;
@@ -97,6 +99,48 @@ UIView* g_renderView = nil;
 UIView* g_padView = nil;
 bool g_cemu_initialized = false;
 
+static NSDictionary* SettingsKeychainQuery()
+{
+	return @{
+		(__bridge id)kSecClass : (__bridge id)kSecClassGenericPassword,
+		(__bridge id)kSecAttrService : @"sb.cemuios.cemuios.settings",
+		(__bridge id)kSecAttrAccount : @"settings.xml"
+	};
+}
+
+// Backup settings.xml to Keychain so it survives app reinstall
+static void BackupSettingsToKeychain()
+{
+	auto path = ActiveSettings::GetConfigPath("settings.xml");
+	NSData* data = [NSData dataWithContentsOfFile:[NSString stringWithUTF8String:path.c_str()]];
+	if (!data)
+		return;
+
+	NSDictionary* query = SettingsKeychainQuery();
+	OSStatus status = SecItemUpdate((__bridge CFDictionaryRef)query,
+		(__bridge CFDictionaryRef)@{(__bridge id)kSecValueData : data});
+	if (status == errSecItemNotFound)
+	{
+		NSMutableDictionary* add = [query mutableCopy];
+		add[(__bridge id)kSecValueData] = data;
+		SecItemAdd((__bridge CFDictionaryRef)add, nullptr);
+	}
+}
+
+static NSData* LoadSettingsBackupFromKeychain()
+{
+	NSMutableDictionary* query = [SettingsKeychainQuery() mutableCopy];
+	query[(__bridge id)kSecReturnData] = @YES;
+	query[(__bridge id)kSecMatchLimit] = (__bridge id)kSecMatchLimitOne;
+	CFTypeRef result = nullptr;
+	OSStatus status = SecItemCopyMatching((__bridge CFDictionaryRef)query, &result);
+	if (status == errSecSuccess && result)
+		return (__bridge_transfer NSData*)result;
+	if (result)
+		CFRelease(result);
+	return nil;
+}
+
 // --- Security-scoped bookmark helpers for MLC Path ---
 static NSString* const kMLCPathBookmarkKey = @"mlcPathBookmark";
 
@@ -123,7 +167,7 @@ static NSURL* ResolveAndActivateMLCPathBookmark()
 	if (url && !err)
 	{
 		[url startAccessingSecurityScopedResource];
-		GetConfig().SetMLCPath(fs::path(url.fileSystemRepresentation));
+		GetConfig().SetMLCPath(fs::path(url.fileSystemRepresentation), false);
 		cemuLog_log(LogType::Force, "MLC path bookmark resolved: {}", url.fileSystemRepresentation);
 		return url;
 	}
@@ -846,14 +890,24 @@ void InitializeCemuCore()
 	CreateDefaultCemuFiles();
 
 	IOSLOG("InitializeCemuCore: config path");
-	GetConfigHandle().SetFilename(ActiveSettings::GetConfigPath("settings.xml").generic_wstring());
-	std::error_code ec;
-	const bool isFirstStart = !fs::exists(ActiveSettings::GetConfigPath("settings.xml"), ec);
+	auto settingsPath = ActiveSettings::GetConfigPath("settings.xml");
+	GetConfigHandle().SetFilename(settingsPath.generic_wstring());
+
+	// Restore settings.xml from Keychain backup if missing (survives app reinstall)
+	if (!fs::exists(settingsPath))
+	{
+		NSData* backup = LoadSettingsBackupFromKeychain();
+		if (backup)
+		{
+			std::error_code ec2;
+			fs::create_directories(settingsPath.parent_path(), ec2);
+			[backup writeToFile:[NSString stringWithUTF8String:settingsPath.c_str()] atomically:YES];
+			IOSLOG("Restored settings.xml from Keychain backup");
+		}
+	}
 
 	IOSLOG("InitializeCemuCore: NetworkConfig");
 	NetworkConfig::LoadOnce();
-	if (isFirstStart)
-		GetConfigHandle().Save();
 
 	IOSLOG("InitializeCemuCore: Resolve MLC path bookmark");
 	ResolveAndActivateMLCPathBookmark();
@@ -938,7 +992,7 @@ void InitializeCemuCore()
 	GetConfig().pad_device = L"ios_default";
 	GetConfig().tv_volume = 100;
 	GetConfig().pad_volume = 100;
-	GetConfigHandle().Save();
+	// Don't save here — it would overwrite graphic pack presets loaded during LoadAll
 
 	CafeSystem::SetImplementation(&g_system_impl);
 	g_cemu_initialized = true;
@@ -1129,6 +1183,7 @@ extern "C" void CemuIOS_ShowErrorDialog(const char* message, const char* title)
 		SaveMLCPathBookmark(nil);
 		GetConfig().SetMLCPath(fs::path(), false);
 		GetConfigHandle().Save();
+		BackupSettingsToKeychain();
 		[tableView reloadRowsAtIndexPaths:@[indexPath] withRowAnimation:UITableViewRowAnimationAutomatic];
 		return;
 	}
@@ -1311,16 +1366,23 @@ extern "C" void CemuIOS_ShowErrorDialog(const char* message, const char* title)
 	config.graphic_pack_entries.clear();
 	for (auto& gp : GraphicPack2::GetGraphicPacks())
 	{
+		auto filename = _utf8ToPath(gp->GetNormalizedPathString());
 		if (gp->IsEnabled())
 		{
-			std::unordered_map<std::string, std::string> presetMap;
-			auto presets = gp->GetActivePresets();
-			for (auto& p : presets)
-				presetMap[p->category] = p->name;
-			config.graphic_pack_entries[gp->GetVirtualPath()] = presetMap;
+			config.graphic_pack_entries.try_emplace(filename);
+			auto& it = config.graphic_pack_entries[filename];
+			for (const auto& preset : gp->GetActivePresets())
+				it.try_emplace(preset->category, preset->name);
+		}
+		else if (gp->IsDefaultEnabled())
+		{
+			config.graphic_pack_entries.try_emplace(filename);
+			auto& it = config.graphic_pack_entries[filename];
+			it.try_emplace("_disabled", "false");
 		}
 	}
 	GetConfigHandle().Save();
+	BackupSettingsToKeychain();
 }
 
 - (void)dismiss
@@ -1442,6 +1504,8 @@ extern "C" void CemuIOS_ShowErrorDialog(const char* message, const char* title)
 		std::string presetName = preset->name;
 		[alert addAction:[UIAlertAction actionWithTitle:name style:style handler:^(UIAlertAction* action) {
 			gpCopy->SetActivePreset(catCopy, presetName);
+			if (!gpCopy->IsEnabled())
+				gpCopy->SetEnabled(true);
 			[self saveGraphicPackConfig];
 			[self.tableView reloadData];
 		}]];
@@ -1467,6 +1531,7 @@ extern "C" void CemuIOS_ShowErrorDialog(const char* message, const char* title)
 @property (strong, nonatomic) UITableView* gameListTable;
 @property (strong, nonatomic) UIButton* settingsButton;
 @property (strong, nonatomic) UILabel* fpsLabel;
+@property (strong, nonatomic) UILabel* memoryLabel;
 @property (strong, nonatomic) NSTimer* fpsTimer;
 @property (nonatomic) uint32_t lastFrameCount;
 @property (strong, nonatomic) NSURL* securityScopedURL;
@@ -1552,7 +1617,7 @@ extern "C" void CemuIOS_ShowErrorDialog(const char* message, const char* title)
 	[self.view addGestureRecognizer:pan];
 
 	// FPS counter label — top-left, always on top
-	self.fpsLabel = [[UILabel alloc] initWithFrame:CGRectMake(16, 8, 100, 22)];
+	self.fpsLabel = [[UILabel alloc] initWithFrame:CGRectMake(16, 4, 110, 22)];
 	self.fpsLabel.textColor = [UIColor greenColor];
 	self.fpsLabel.backgroundColor = [UIColor clearColor];
 	self.fpsLabel.font = [UIFont monospacedDigitSystemFontOfSize:14.0 weight:UIFontWeightBold];
@@ -1563,6 +1628,18 @@ extern "C" void CemuIOS_ShowErrorDialog(const char* message, const char* title)
 	self.fpsLabel.layer.shadowRadius = 2;
 	self.fpsLabel.layer.shadowOpacity = 1.0;
 	[self.view addSubview:self.fpsLabel];
+
+	self.memoryLabel = [[UILabel alloc] initWithFrame:CGRectMake(16, 26, 110, 20)];
+	self.memoryLabel.textColor = [UIColor greenColor];
+	self.memoryLabel.backgroundColor = [UIColor clearColor];
+	self.memoryLabel.font = [UIFont monospacedDigitSystemFontOfSize:12.0 weight:UIFontWeightBold];
+	self.memoryLabel.text = @"";
+	self.memoryLabel.hidden = YES;
+	self.memoryLabel.layer.shadowColor = [UIColor blackColor].CGColor;
+	self.memoryLabel.layer.shadowOffset = CGSizeMake(1, 1);
+	self.memoryLabel.layer.shadowRadius = 2;
+	self.memoryLabel.layer.shadowOpacity = 1.0;
+	[self.view addSubview:self.memoryLabel];
 
 	// Hidden text field for swkbd keyboard input
 	self.hiddenTextField = [[UITextField alloc] initWithFrame:CGRectMake(-100, -100, 1, 1)];
@@ -1663,6 +1740,8 @@ extern "C" void CemuIOS_ShowErrorDialog(const char* message, const char* title)
 	// Keep FPS label on top
 	if (!self.fpsLabel.hidden)
 		[self.view bringSubviewToFront:self.fpsLabel];
+	if (!self.memoryLabel.hidden)
+		[self.view bringSubviewToFront:self.memoryLabel];
 }
 
 - (void)updateJitStatus:(NSString*)status
@@ -1699,6 +1778,23 @@ extern "C" void CemuIOS_ShowErrorDialog(const char* message, const char* title)
 	uint32_t fps = current - self.lastFrameCount;
 	self.lastFrameCount = current;
 	self.fpsLabel.text = [NSString stringWithFormat:@" FPS: %u ", fps];
+
+	uint64_t availableBytes = os_proc_available_memory();
+	uint64_t usedBytes = 0;
+	mach_task_basic_info info;
+	mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
+	if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, reinterpret_cast<task_info_t>(&info), &count) == KERN_SUCCESS)
+		usedBytes = info.resident_size;
+	uint64_t totalBytes = usedBytes + availableBytes;
+	if (totalBytes > 0)
+	{
+		uint32_t percent = static_cast<uint32_t>((usedBytes * 100) / totalBytes);
+		self.memoryLabel.text = [NSString stringWithFormat:@" RAM: %u%% ", percent];
+	}
+	else
+	{
+		self.memoryLabel.text = @" RAM: --% ";
+	}
 }
 
 - (void)checkSwkbd
@@ -1996,6 +2092,8 @@ extern "C" void CemuIOS_ShowErrorDialog(const char* message, const char* title)
 				self.overlayView.hidden = YES;
 				self.fpsLabel.hidden = NO;
 				[self.view bringSubviewToFront:self.fpsLabel];
+				self.memoryLabel.hidden = NO;
+				[self.view bringSubviewToFront:self.memoryLabel];
 				self.lastFrameCount = g_cemuFrameCounter.load(std::memory_order_relaxed);
 				self.fpsTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 target:self selector:@selector(updateFPS) userInfo:nil repeats:YES];
 				[self.view setNeedsLayout];

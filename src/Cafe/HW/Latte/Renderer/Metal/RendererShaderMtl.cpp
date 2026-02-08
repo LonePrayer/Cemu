@@ -9,13 +9,6 @@
 #include "GameProfile/GameProfile.h"
 #include "util/helpers/helpers.h"
 
-#if defined(CEMU_IOS)
-#include <dispatch/dispatch.h>
-// Allow up to 3 concurrent Metal shader compilations on iOS
-// Using a semaphore instead of a mutex to balance parallelism vs XPC stability
-static dispatch_semaphore_t s_iosShaderCompileSema = dispatch_semaphore_create(3);
-#endif
-
 #define METAL_AIR_CACHE_NAME "Cemu_AIR_cache"
 #define METAL_AIR_CACHE_PATH "/Volumes/" METAL_AIR_CACHE_NAME
 #define METAL_AIR_CACHE_SIZE (16 * 1024 * 1024)
@@ -37,7 +30,7 @@ public:
 			return;
 
 		// Create thread pool
-		const uint32 threadCount = 4; // more threads to reduce shader compilation stalls
+		const uint32 threadCount = 2;
 		for (uint32 i = 0; i < threadCount; ++i)
 			s_threads.emplace_back(&ShaderMtlThreadPool::CompilerThreadFunc, this);
 
@@ -294,14 +287,7 @@ MTL::Library* RendererShaderMtl::LibraryFromSource()
     }
 
     NS::Error* error = nullptr;
-#if defined(CEMU_IOS)
-    // Limit concurrent shader compilations on iOS to avoid Metal XPC service overload
-    dispatch_semaphore_wait(s_iosShaderCompileSema, DISPATCH_TIME_FOREVER);
-#endif
 	MTL::Library* library = m_mtlr->GetDevice()->newLibrary(ToNSString(m_mslCode), options, &error);
-#if defined(CEMU_IOS)
-    dispatch_semaphore_signal(s_iosShaderCompileSema);
-#endif
 	if (error)
     {
         cemuLog_log(LogType::Force, "failed to create library from source: {} -> {}", error->localizedDescription()->utf8String(), m_mslCode.c_str());

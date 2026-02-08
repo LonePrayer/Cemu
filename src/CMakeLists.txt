@@ -109,6 +109,7 @@ if (CEMU_IOS)
 		"-framework UIKit"
 		"-framework Metal"
 		"-framework QuartzCore"
+		"-framework Security"
 		"-framework UniformTypeIdentifiers"
 	)
 endif()

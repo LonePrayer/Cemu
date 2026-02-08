@@ -58,9 +58,6 @@ static void initCompileThread()
 		numCompileThreads = 2 + (cpuCoreCount - 3); // 2 plus one additionally for every extra core above 3
 
 	numCompileThreads = std::min(numCompileThreads, 8u); // cap at 8
-#if defined(CEMU_IOS)
-	numCompileThreads = std::min(numCompileThreads, 4u); // balance parallelism vs XPC stability
-#endif
 
 	for (uint32 i = 0; i < numCompileThreads; i++)
 	{

@@ -192,7 +192,7 @@ MetalRenderer::MetalRenderer()
     m_supportsMetal3 = m_device->supportsFamily(MTL::GPUFamilyMetal3);
     m_supportsMeshShaders = (m_supportsMetal3 && (m_vendor != GfxVendor::Intel || GetConfig().force_mesh_shaders.GetValue())); // Intel GPUs have issues with mesh shaders
 #if defined(CEMU_IOS)
-    m_recommendedMaxVRAMUsage = 1024ULL * 1024ULL * 1024ULL; // 1GB default on iOS (unified memory)
+    m_recommendedMaxVRAMUsage = 3072ULL * 1024ULL * 1024ULL; // 3GB on iOS with increased-memory-limit entitlement
 #else
     m_recommendedMaxVRAMUsage = m_device->recommendedMaxWorkingSetSize();
 #endif
@@ -249,12 +249,6 @@ MetalRenderer::MetalRenderer()
         m_defaultCommitTreshlod = 64;
     else
         m_defaultCommitTreshlod = 196;
-
-#ifdef CEMU_IOS
-    // On iOS, commit more frequently to keep command buffers small
-    // This prevents IOGPU resource exhaustion within a single command buffer
-    m_defaultCommitTreshlod = std::min(m_defaultCommitTreshlod, (uint32)32);
-#endif
 
     // Occlusion queries
     m_occlusionQuery.m_resultBuffer = m_device->newBuffer(OCCLUSION_QUERY_POOL_SIZE * sizeof(uint64), MTL::ResourceStorageModeShared);
@@ -1546,12 +1540,7 @@ void MetalRenderer::draw_endSequence()
 	m_recordedDrawcalls++;
 	// The number of draw calls needs to twice as big, since we are interrupting the render pass
 	// TODO: ucomment?
-#ifdef CEMU_IOS
-	// On iOS, commit more aggressively to prevent IOGPU resource exhaustion
-	if (m_recordedDrawcalls >= m_commitTreshold/* || hasReadback*/)
-#else
 	if (m_recordedDrawcalls >= m_commitTreshold * 2/* || hasReadback*/)
-#endif
 	{
 		CommitCommandBuffer();
 
@@ -1983,17 +1972,6 @@ void MetalRenderer::CommitCommandBuffer()
     EndEncoding();
 
     ProcessFinishedCommandBuffers();
-
-#ifdef CEMU_IOS
-    // On iOS, limit in-flight command buffers to prevent IOGPU resource exhaustion
-    constexpr size_t kMaxInFlightCommandBuffers = 8;
-    if (m_executingCommandBuffers.size() >= kMaxInFlightCommandBuffers)
-    {
-        auto oldest = m_executingCommandBuffers.front();
-        oldest->waitUntilCompleted();
-        ProcessFinishedCommandBuffers();
-    }
-#endif
 
     // Commit the command buffer
     if (!m_currentCommandBuffer.m_commited)

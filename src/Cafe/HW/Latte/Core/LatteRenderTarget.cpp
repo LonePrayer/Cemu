@@ -687,20 +687,24 @@ void LatteRenderTarget_itHLESwapScanBuffer()
 	extern std::atomic<uint32_t> g_cemuFrameCounter;
 	g_cemuFrameCounter.fetch_add(1, std::memory_order_relaxed);
 	// Frame limiter: enforce minimum frame time to prevent game speedup on iOS
-	// Use swapInterval to determine target: swapInterval=1 → 60fps, =2 → 30fps
 	{
-		static auto s_lastSwapTime = std::chrono::steady_clock::now();
-		auto now = std::chrono::steady_clock::now();
-		auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(now - s_lastSwapTime);
+		static auto s_nextSwapTime = std::chrono::steady_clock::now();
 		uint32 swapInterval = 1;
 		if (LatteGPUState.sharedArea)
 			swapInterval = std::max((uint32)1, (uint32)LatteGPUState.sharedArea->swapInterval);
-		auto targetFrameTime = std::chrono::microseconds(16667 * swapInterval); // 16.667ms * swapInterval
-		if (elapsed < targetFrameTime)
-		{
-			std::this_thread::sleep_for(targetFrameTime - elapsed);
-		}
-		s_lastSwapTime = std::chrono::steady_clock::now();
+		auto targetFrameTime = std::chrono::nanoseconds(16'666'667LL * swapInterval);
+		s_nextSwapTime += targetFrameTime;
+		// Coarse sleep leaving 1ms margin, then spin-wait for precision
+		auto wakeTarget = s_nextSwapTime - std::chrono::milliseconds(1);
+		auto now = std::chrono::steady_clock::now();
+		if (now < wakeTarget)
+			std::this_thread::sleep_for(wakeTarget - now);
+		while (std::chrono::steady_clock::now() < s_nextSwapTime)
+			; // spin
+		// Prevent drift if a frame took longer than target
+		now = std::chrono::steady_clock::now();
+		if (now > s_nextSwapTime + targetFrameTime)
+			s_nextSwapTime = now;
 	}
 #endif
 	performanceMonitor.cycle[performanceMonitor.cycleIndex].frameCounter++;
