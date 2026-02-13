@@ -602,7 +602,12 @@ void PPCRecompiler_deleteFunction(PPCRecFunction_t* func)
 			rangeStore_ppcRanges.deleteRange(r.storedRange);
 		r.storedRange = nullptr;
 	}
-	// todo - free x86 code
+#ifdef __aarch64__
+	if (func->x86Code && func->x86Size > 0)
+		PPCRecompiler_cleanupAArch64Code(func->x86Code, func->x86Size);
+#endif
+	func->x86Code = nullptr;
+	func->x86Size = 0;
 }
 
 void PPCRecompiler_invalidateRange(uint32 startAddr, uint32 endAddr)

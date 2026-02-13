@@ -64,23 +64,30 @@ static const util::Cpu s_cpu;
 
 #ifdef CEMU_IOS
 #include <libkern/OSCacheControl.h>
+#include <sys/mman.h>
+#include <unordered_map>
 
-// Pooled JIT allocator for iOS - single large mmap region to avoid VM region limit
+// Pooled JIT allocator for iOS using RW mmap + per-block mprotect(RE) via CS_DEBUGGED.
+// Allocations are page-aligned (16KB on A-series chips) to avoid mprotect cross-contamination.
+// The pool uses virtual memory reservation (lazy commit) so only used pages cost RAM.
 class JitPoolAllocator : public Allocator
 {
   private:
-	static constexpr size_t POOL_SIZE = 512 * 1024 * 1024; // 512MB JIT pool
+	static constexpr size_t POOL_SIZE = 768 * 1024 * 1024; // 768MB virtual reservation
 	inline static uint8_t* s_poolBase = nullptr;
 	inline static size_t s_poolOffset = 0;
 	inline static std::mutex s_poolMutex;
+
+	struct FreeBlock { uint8_t* ptr; size_t size; };
+	inline static std::vector<FreeBlock> s_freeList;
+	inline static std::unordered_map<uint32_t*, size_t> s_allocSizes;
 
 	static void ensurePool()
 	{
 		if (s_poolBase)
 			return;
-		// RW pool - individual allocations will be mprotected to RE via CS_DEBUGGED
-		int mode = MAP_PRIVATE | MAP_ANON;
-		void* p = mmap(NULL, POOL_SIZE, PROT_READ | PROT_WRITE, mode, -1, 0);
+		void* p = mmap(NULL, POOL_SIZE, PROT_READ | PROT_WRITE,
+					   MAP_PRIVATE | MAP_ANON, -1, 0);
 		if (p == MAP_FAILED)
 		{
 			cemuLog_log(LogType::Force, "JitPoolAllocator: mmap failed (errno={})", errno);
@@ -98,27 +105,81 @@ class JitPoolAllocator : public Allocator
 		ensurePool();
 		if (!s_poolBase)
 			return nullptr;
-		// Page-align for safe mprotect (avoids cross-allocation page sharing)
 		const size_t pageSize = getpagesize();
 		size = (size + pageSize - 1) & ~(pageSize - 1);
+		// Try to reuse a freed block (best-fit)
+		size_t bestIdx = SIZE_MAX;
+		size_t bestWaste = SIZE_MAX;
+		for (size_t i = 0; i < s_freeList.size(); i++)
+		{
+			if (s_freeList[i].size >= size)
+			{
+				size_t waste = s_freeList[i].size - size;
+				if (waste < bestWaste)
+				{
+					bestWaste = waste;
+					bestIdx = i;
+					if (waste == 0) break;
+				}
+			}
+		}
+		if (bestIdx != SIZE_MAX)
+		{
+			uint8_t* ptr = s_freeList[bestIdx].ptr;
+			size_t blockSize = s_freeList[bestIdx].size;
+			if (bestWaste >= pageSize)
+			{
+				s_freeList[bestIdx].ptr += size;
+				s_freeList[bestIdx].size -= size;
+			}
+			else
+			{
+				size = blockSize;
+				s_freeList.erase(s_freeList.begin() + bestIdx);
+			}
+			// mprotect back to RW for reuse (was RE when freed)
+			mprotect(ptr, size, PROT_READ | PROT_WRITE);
+			auto* result = reinterpret_cast<uint32_t*>(ptr);
+			s_allocSizes[result] = size;
+			return result;
+		}
+		// Bump allocate from pool
 		if (s_poolOffset + size > POOL_SIZE)
 		{
-			cemuLog_log(LogType::Force, "JitPoolAllocator: pool exhausted ({}/{})", s_poolOffset, POOL_SIZE);
+			static size_t s_exhaustLogCount = 0;
+			if (s_exhaustLogCount < 3)
+			{
+				cemuLog_log(LogType::Force, "JitPoolAllocator: pool exhausted ({}/{}) freeBlocks={} allocSizes={}",
+					s_poolOffset, POOL_SIZE, s_freeList.size(), s_allocSizes.size());
+				s_exhaustLogCount++;
+				if (s_exhaustLogCount == 3)
+					cemuLog_log(LogType::Force, "JitPoolAllocator: suppressing further exhaustion messages");
+			}
 			return nullptr;
 		}
 		uint8_t* ptr = s_poolBase + s_poolOffset;
 		s_poolOffset += size;
-		return reinterpret_cast<uint32_t*>(ptr);
+		auto* result = reinterpret_cast<uint32_t*>(ptr);
+		s_allocSizes[result] = size;
+		return result;
 	}
 
 	void free(uint32_t* p) override
 	{
-		// bump allocator - no individual free
+		if (!p || !s_poolBase) return;
+		uint8_t* bp = reinterpret_cast<uint8_t*>(p);
+		if (bp < s_poolBase || bp >= s_poolBase + POOL_SIZE) return;
+		std::lock_guard<std::mutex> lock(s_poolMutex);
+		auto it = s_allocSizes.find(p);
+		if (it == s_allocSizes.end()) return;
+		size_t size = it->second;
+		s_allocSizes.erase(it);
+		s_freeList.push_back({bp, size});
 	}
 
 	bool useProtect() const override
 	{
-		return true; // mprotect to RE works via CS_DEBUGGED
+		return true; // per-block mprotect(RE) via CS_DEBUGGED
 	}
 };
 #endif
@@ -1695,7 +1756,14 @@ bool PPCRecompiler_generateAArch64Code(struct PPCRecFunction_t* PPCRecFunction, 
 	}
 	catch (const std::exception& e)
 	{
-		cemuLog_log(LogType::Force, "PPCRecompiler_generateAArch64Code(): exception: {}", e.what());
+		static size_t s_allocExcCount = 0;
+		const char* what = e.what();
+		bool isAllocFail = what && std::string_view(what).find("alloc") != std::string_view::npos;
+		if (!isAllocFail || s_allocExcCount < 3)
+		{
+			cemuLog_log(LogType::Force, "PPCRecompiler_generateAArch64Code(): exception: {}", what);
+			if (isAllocFail) s_allocExcCount++;
+		}
 		return false;
 	}
 	catch (...)
