@@ -73,7 +73,7 @@ static const util::Cpu s_cpu;
 class JitPoolAllocator : public Allocator
 {
   private:
-	static constexpr size_t POOL_SIZE = 768 * 1024 * 1024; // 768MB virtual reservation
+	static constexpr size_t POOL_SIZE = 1024 * 1024 * 1024; // 1GB virtual reservation
 	inline static uint8_t* s_poolBase = nullptr;
 	inline static size_t s_poolOffset = 0;
 	inline static std::mutex s_poolMutex;
