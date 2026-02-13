@@ -1655,6 +1655,29 @@ extern "C" void CemuIOS_ShowErrorDialog(const char* message, const char* title)
 	self.swkbdTimer = [NSTimer scheduledTimerWithTimeInterval:0.25 target:self selector:@selector(checkSwkbd) userInfo:nil repeats:YES];
 }
 
+- (void)viewWillAppear:(BOOL)animated
+{
+	[super viewWillAppear:animated];
+	// Refresh game list when returning from settings (only if game list is visible)
+	if (!self.gameListTable.hidden && self.gameEntries != nil)
+	{
+		if (CafeTitleList::IsScanning())
+		{
+			// Wait for scan to complete on background, then refresh on main
+			dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+				CafeTitleList::WaitForMandatoryScan();
+				dispatch_async(dispatch_get_main_queue(), ^{
+					[self refreshGameList];
+				});
+			});
+		}
+		else
+		{
+			[self refreshGameList];
+		}
+	}
+}
+
 - (void)viewDidLayoutSubviews
 {
 	[super viewDidLayoutSubviews];
