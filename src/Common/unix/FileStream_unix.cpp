@@ -3,14 +3,15 @@
 
 fs::path findPathCI(const fs::path& path)
 {
-	if (fs::exists(path)) return path;
+	std::error_code ec;
+	if (fs::exists(path, ec)) return path;
 
 	fs::path fName = path.filename();
 	fs::path parentPath = path.parent_path();
-	if (!fs::exists(parentPath))
+	if (!fs::exists(parentPath, ec))
 	{
 		auto CIParent = findPathCI(parentPath);
-		if (fs::exists(CIParent))
+		if (fs::exists(CIParent, ec))
 			return findPathCI(CIParent / fName);
 	}
 
@@ -225,7 +226,8 @@ FileStream::FileStream(const fs::path& path, bool isOpen, bool isWriteable)
 		m_fileStream.open(CIPath, std::ios_base::in | std::ios_base::out | std::ios_base::binary | std::ios_base::trunc);
 		m_isValid = m_fileStream.is_open();
 	}
-	if(m_isValid && fs::is_directory(path))
+	std::error_code ec;
+	if(m_isValid && fs::is_directory(path, ec))
 	{
 		m_isValid = false;
 		m_fileStream.close();
